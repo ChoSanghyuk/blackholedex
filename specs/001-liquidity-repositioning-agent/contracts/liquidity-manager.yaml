@@ -1,0 +1,406 @@
+# Liquidity Manager API Contract
+# Purpose: Mint and unstake liquidity position operations
+
+version: 1.0.0
+name: LiquidityManager
+description: |
+  Manages minting new concentrated liquidity positions and unstaking existing positions
+  on Blackhole DEX. Handles token approvals, transaction building, submission, and
+  confirmation tracking.
+
+types:
+  MintParams:
+    description: Parameters for minting a new concentrated liquidity position
+    fields:
+      token0:
+        type: address
+        description: Lower-address token (must be < token1)
+        required: true
+      token1:
+        type: address
+        description: Higher-address token (must be > token0)
+        required: true
+      deployer:
+        type: address
+        description: Pool deployer proxy address
+        required: true
+        default: "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
+      tickLower:
+        type: int24
+        description: Lower tick bound (must be multiple of tick spacing)
+        required: true
+      tickUpper:
+        type: int24
+        description: Upper tick bound (must be multiple of tick spacing)
+        required: true
+      amount0Desired:
+        type: uint256
+        description: Maximum amount of token0 to deposit
+        required: true
+      amount1Desired:
+        type: uint256
+        description: Maximum amount of token1 to deposit
+        required: true
+      amount0Min:
+        type: uint256
+        description: Minimum amount of token0 (slippage protection)
+        required: true
+      amount1Min:
+        type: uint256
+        description: Minimum amount of token1 (slippage protection)
+        required: true
+      recipient:
+        type: address
+        description: NFT owner address
+        required: true
+      deadline:
+        type: uint256
+        description: Transaction deadline (unix timestamp)
+        required: true
+
+  MintResult:
+    description: Result of a mint operation
+    fields:
+      positionID:
+        type: uint256
+        description: NFT token ID of the newly created position
+      liquidity:
+        type: uint128
+        description: Actual liquidity minted
+      amount0:
+        type: uint256
+        description: Actual amount of token0 deposited
+      amount1:
+        type: uint256
+        description: Actual amount of token1 deposited
+      transactionHash:
+        type: bytes32
+        description: Mint transaction hash
+      gasUsed:
+        type: uint256
+        description: Gas consumed by mint transaction
+
+  UnstakeParams:
+    description: Parameters for unstaking a position
+    fields:
+      positionID:
+        type: uint256
+        description: NFT token ID to unstake
+        required: true
+      liquidity:
+        type: uint128
+        description: Amount of liquidity to remove (0 = remove all)
+        required: false
+        default: 0
+      amount0Min:
+        type: uint256
+        description: Minimum token0 to receive (slippage protection)
+        required: true
+      amount1Min:
+        type: uint256
+        description: Minimum token1 to receive (slippage protection)
+        required: true
+      deadline:
+        type: uint256
+        description: Transaction deadline (unix timestamp)
+        required: true
+      collectFees:
+        type: bool
+        description: Whether to collect fees in same transaction
+        required: false
+        default: true
+
+  UnstakeResult:
+    description: Result of an unstake operation
+    fields:
+      amount0:
+        type: uint256
+        description: Amount of token0 withdrawn
+      amount1:
+        type: uint256
+        description: Amount of token1 withdrawn
+      fees0:
+        type: uint256
+        description: Fees collected in token0
+      fees1:
+        type: uint256
+        description: Fees collected in token1
+      decreaseLiquidityTxHash:
+        type: bytes32
+        description: decreaseLiquidity transaction hash
+      collectTxHash:
+        type: bytes32
+        description: collect transaction hash (if collectFees=true)
+      gasUsed:
+        type: uint256
+        description: Total gas consumed
+
+operations:
+  MintPosition:
+    description: Create a new concentrated liquidity position
+    http_method: POST
+    path: /liquidity/mint
+    request_body:
+      type: MintParams
+    workflow:
+      - step: 1_validate_params
+        description: Validate tick bounds, token ordering, amounts
+      - step: 2_check_balances
+        description: Ensure sufficient token balances
+      - step: 3_approve_token0
+        description: Approve NonfungiblePositionManager to spend token0
+      - step: 4_approve_token1
+        description: Approve NonfungiblePositionManager to spend token1
+      - step: 5_call_mint
+        description: Call mint() on NonfungiblePositionManager
+      - step: 6_wait_confirmation
+        description: Wait for transaction confirmation
+      - step: 7_parse_events
+        description: Extract position ID from IncreaseLiquidity event
+    returns:
+      type: MintResult
+      description: Details of the newly minted position
+    errors:
+      - code: INSUFFICIENT_BALANCE
+        description: Not enough token0 or token1 to mint position
+      - code: INVALID_TICK_RANGE
+        description: Tick bounds invalid (not multiples of spacing, or tickLower >= tickUpper)
+      - code: SLIPPAGE_EXCEEDED
+        description: Actual amounts would be below amount0Min or amount1Min
+      - code: APPROVAL_FAILED
+        description: Token approval transaction reverted
+      - code: MINT_FAILED
+        description: Mint transaction reverted (check error reason)
+      - code: DEADLINE_EXCEEDED
+        description: Transaction submitted after deadline
+    performance_target: <30 seconds for complete mint workflow
+
+  UnstakePosition:
+    description: Remove liquidity from a position and optionally collect fees
+    http_method: POST
+    path: /liquidity/unstake
+    request_body:
+      type: UnstakeParams
+    workflow:
+      - step: 1_validate_params
+        description: Validate position ID and amounts
+      - step: 2_query_position
+        description: Get current position liquidity
+      - step: 3_decrease_liquidity
+        description: Call decreaseLiquidity() on NonfungiblePositionManager
+      - step: 4_wait_decrease_confirmation
+        description: Wait for decreaseLiquidity confirmation
+      - step: 5_collect_tokens
+        description: Call collect() to withdraw tokens and fees (if collectFees=true)
+      - step: 6_wait_collect_confirmation
+        description: Wait for collect confirmation
+      - step: 7_parse_results
+        description: Extract amounts from events
+    returns:
+      type: UnstakeResult
+      description: Amounts withdrawn and fees collected
+    errors:
+      - code: POSITION_NOT_FOUND
+        description: Position ID does not exist
+      - code: POSITION_NOT_OWNED
+        description: Position not owned by configured wallet
+      - code: INSUFFICIENT_LIQUIDITY
+        description: Trying to remove more liquidity than position has
+      - code: DECREASE_FAILED
+        description: decreaseLiquidity transaction reverted
+      - code: COLLECT_FAILED
+        description: collect transaction reverted
+      - code: SLIPPAGE_EXCEEDED
+        description: Actual amounts below minimums
+    performance_target: <30 seconds for complete unstake workflow
+
+  SimulateMint:
+    description: Dry-run mint operation to estimate amounts and gas
+    http_method: POST
+    path: /liquidity/simulate/mint
+    request_body:
+      type: MintParams
+    returns:
+      type: object
+      fields:
+        estimatedLiquidity:
+          type: uint128
+          description: Expected liquidity to be minted
+        estimatedAmount0:
+          type: uint256
+          description: Expected token0 deposit
+        estimatedAmount1:
+          type: uint256
+          description: Expected token1 deposit
+        estimatedGas:
+          type: uint256
+          description: Estimated gas cost (wei)
+        currentPoolTick:
+          type: int24
+          description: Current pool tick for reference
+        withinRange:
+          type: bool
+          description: Whether position would be in-range at current price
+    errors:
+      - code: SIMULATION_FAILED
+        description: eth_call returned error
+      - code: INVALID_PARAMS
+        description: Parameters would cause transaction revert
+    performance_target: <2 seconds
+
+  SimulateUnstake:
+    description: Dry-run unstake operation to estimate amounts and gas
+    http_method: POST
+    path: /liquidity/simulate/unstake
+    request_body:
+      type: UnstakeParams
+    returns:
+      type: object
+      fields:
+        estimatedAmount0:
+          type: uint256
+          description: Expected token0 withdrawal
+        estimatedAmount1:
+          type: uint256
+          description: Expected token1 withdrawal
+        estimatedFees0:
+          type: uint256
+          description: Expected fees in token0
+        estimatedFees1:
+          type: uint256
+          description: Expected fees in token1
+        estimatedGas:
+          type: uint256
+          description: Estimated total gas cost (wei)
+    performance_target: <2 seconds
+
+  GetApprovalStatus:
+    description: Check if tokens are approved for NonfungiblePositionManager
+    http_method: GET
+    path: /liquidity/approvals
+    parameters:
+      - name: token0
+        type: address
+        in: query
+        required: true
+      - name: token1
+        type: address
+        in: query
+        required: true
+    returns:
+      type: object
+      fields:
+        token0Approved:
+          type: bool
+          description: Whether token0 has sufficient allowance
+        token0Allowance:
+          type: uint256
+          description: Current token0 allowance
+        token1Approved:
+          type: bool
+          description: Whether token1 has sufficient allowance
+        token1Allowance:
+          type: uint256
+          description: Current token1 allowance
+    performance_target: <1 second
+
+validation_rules:
+  - rule: tick_spacing
+    description: Tick bounds must be multiples of 200 (tick spacing for Algebra pools)
+    enforcement: Pre-transaction validation
+    example: "tickLower % 200 == 0 && tickUpper % 200 == 0"
+
+  - rule: tick_ordering
+    description: tickLower must be less than tickUpper
+    enforcement: Pre-transaction validation
+    example: "tickLower < tickUpper"
+
+  - rule: token_ordering
+    description: token0 address must be < token1 address (canonical ordering)
+    enforcement: Pre-transaction validation
+    example: "token0 < token1"
+
+  - rule: slippage_bounds
+    description: amount0Min and amount1Min must be <= desired amounts
+    enforcement: Pre-transaction validation
+    example: "amount0Min <= amount0Desired && amount1Min <= amount1Desired"
+
+  - rule: deadline_future
+    description: Deadline must be in the future
+    enforcement: Pre-transaction validation
+    example: "deadline > time.Now().Unix()"
+
+  - rule: sufficient_balance
+    description: Wallet must have enough token0 and token1
+    enforcement: Pre-transaction RPC check
+    example: "balanceOf(wallet, token0) >= amount0Desired"
+
+error_handling:
+  approval_failures:
+    strategy: retry_with_backoff
+    max_attempts: 3
+    backoff: exponential(1s, 2s, 4s)
+    log_level: error
+
+  transaction_reverts:
+    strategy: parse_revert_reason
+    actions:
+      - Log revert reason with full context
+      - Return detailed error to user
+      - Do not retry (user must fix params)
+
+  network_timeouts:
+    strategy: retry_with_backoff
+    max_attempts: 3
+    backoff: exponential(2s, 4s, 8s)
+    log_level: warning
+
+  gas_price_spikes:
+    strategy: defer_and_notify
+    threshold: max_gas_price_from_config
+    action: Wait for gas prices to normalize
+
+dependencies:
+  contracts:
+    - name: NonfungiblePositionManager
+      address: "0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"
+      abi_path: "blackholedex-contracts/artifacts/@cryptoalgebra/integral-periphery/.../INonfungiblePositionManager.json"
+      methods:
+        - mint(MintParams)
+        - decreaseLiquidity(DecreaseLiquidityParams)
+        - collect(CollectParams)
+
+    - name: ERC20Tokens
+      methods:
+        - approve(address spender, uint256 amount)
+        - allowance(address owner, address spender)
+        - balanceOf(address account)
+
+  rpc:
+    provider: Avalanche C-Chain
+    methods:
+      - eth_call (for simulations and balance checks)
+      - eth_sendRawTransaction (for mint/unstake transactions)
+      - eth_getTransactionReceipt (for confirmation)
+      - eth_getLogs (for event parsing)
+
+performance_requirements:
+  transaction_confirmations:
+    poll_interval: 2s
+    timeout: 3min
+
+  batch_operations:
+    max_concurrent_mints: 1
+    max_concurrent_unstakes: 5
+
+  gas_optimization:
+    use_eip1559: true
+    priority_fee: 1.5 gwei
+    max_fee_cap: base_fee + 2 gwei
+
+security_requirements:
+  - Never log or expose private keys
+  - Validate all addresses are checksummed
+  - Range-check all amounts to prevent overflow
+  - Verify transaction success before marking complete
+  - Use deadline parameter on all transactions (default: now + 20 minutes)
