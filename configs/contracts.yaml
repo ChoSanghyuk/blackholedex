@@ -1,0 +1,53 @@
+# Blackhole DEX Contract Addresses
+# Avalanche C-Chain Mainnet
+
+# Core DEX contracts
+router_v2: "0x04E1dee021Cd12bBa022A72806441B43d8212Fec"
+nonfungible_position_manager: "0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"
+pool_deployer: "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
+
+# Supported pools
+pools:
+  wavax_usdc:
+    address: "0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0"
+    token0: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # USDC
+    token1: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"  # WAVAX
+    tick_spacing: 200
+    fee: 3000  # 0.3%
+
+  wavax_black:
+    address: "0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573"
+    token0: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"  # WAVAX
+    token1: "0xcd94a87696fac69edae3a70fe5725307ae1c43f6"  # BLACKHOLE
+    tick_spacing: 200
+    fee: 3000  # 0.3%
+
+# Token contracts
+tokens:
+  wavax:
+    address: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+    symbol: "WAVAX"
+    decimals: 18
+
+  usdc:
+    address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+    symbol: "USDC"
+    decimals: 6
+
+  blackhole:
+    address: "0xcd94a87696fac69edae3a70fe5725307ae1c43f6"
+    symbol: "BLACK"
+    decimals: 18
+
+# ABI file paths (relative to repository root)
+abis:
+  router_v2: "blackholedex-contracts/artifacts/contracts/RouterV2.sol/RouterV2.json"
+  nonfungible_position_manager: "blackholedex-contracts/artifacts/@cryptoalgebra/integral-periphery/contracts/NonfungiblePositionManager.sol/INonfungiblePositionManager.json"
+  algebra_pool: "blackholedex-contracts/artifacts/@cryptoalgebra/integral-core/contracts/AlgebraPool.sol/IAlgebraPool.json"
+  erc20: "blackholedex-contracts/artifacts/@openzeppelin/contracts/token/ERC20/IERC20.sol/IERC20.json"
+
+# Network settings
+network:
+  chain_id: 43114  # Avalanche C-Chain
+  name: "Avalanche Mainnet"
+  explorer: "https://snowtrace.io"
