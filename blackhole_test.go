@@ -103,6 +103,17 @@ func TestBlackhole(t *testing.T) {
 	}
 	nftPositionManagerClient := contractclient.NewContractClient(client, common.HexToAddress(nonfungiblePositionManager), nftPositionManagerABI)
 
+	// Create NFTPositionManager clients
+	gaugeABIPath := os.Getenv("GAUGE_ABI_PATH")
+	if erc20ABIPath == "" {
+		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	}
+	gaugeABI, err := util.LoadABI(gaugeABIPath)
+	if err != nil {
+		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+	}
+	gaugeClient := contractclient.NewContractClient(client, common.HexToAddress(gauge), gaugeABI)
+
 	// Setup TxListener
 	listener := txlistener.NewTxListener(
 		client,
@@ -121,6 +132,7 @@ func TestBlackhole(t *testing.T) {
 			wavax:                      wavaxClient,
 			wavaxUsdcPair:              wausPoolClient,
 			nonfungiblePositionManager: nftPositionManagerClient,
+			gauge:                      gaugeClient,
 		},
 	}
 

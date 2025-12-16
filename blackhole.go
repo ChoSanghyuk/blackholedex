@@ -4,6 +4,7 @@ import (
 	"blackholego/internal/util"
 	"blackholego/pkg/types"
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,10 +20,11 @@ const (
 	usdc                       = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
 	wavax                      = "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"
 	black                      = "0xcd94a87696fac69edae3a70fe5725307ae1c43f6"
-	wavaxBlackPair             = "0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573" //
+	wavaxBlackPair             = "0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573"
 	wavaxUsdcPair              = "0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0"
 	deployer                   = "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
 	nonfungiblePositionManager = "0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"
+	gauge                      = "0x3ADE52f9779c07471F4B6d5997444C3c2124C1c0"
 )
 
 // Blackhole manages interactions with Blackhole DEX contracts
@@ -497,9 +499,10 @@ func (b *Blackhole) Mint(
 		Operation: "Mint",
 	})
 
-	// T025: Parse NFT token ID from receipt (simplified - would need proper event parsing)
-	// For now, using placeholder - in production would parse Transfer event
-	nftTokenID := big.NewInt(0) // TODO: Parse from mint receipt events
+	// T025: Parse NFT token ID from Transfer event in receipt
+	// The Transfer event is emitted when the NFT is minted (from 0x0 to recipient)
+	// Event signature: Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+	nftTokenID := MintNftTokenId(nftManagerClient, mintReceipt)
 
 	// T026: Construct StakingResult
 	totalGasCost := big.NewInt(0)
@@ -530,4 +533,282 @@ func (b *Blackhole) Mint(
 	}
 
 	return result, nil
+}
+
+// Stake stakes a liquidity position NFT in a GaugeV2 contract to earn additional rewards
+// nftTokenID: ERC721 token ID from previous Mint operation
+// gaugeAddress: GaugeV2 contract address (must match pool)
+// Returns StakingResult with transaction tracking and gas costs
+func (b *Blackhole) Stake(
+	nftTokenID *big.Int,
+) (*StakingResult, error) {
+	// T007-T008: Input validation
+	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: "validation failed: invalid token ID",
+		}, fmt.Errorf("validation failed: invalid token ID")
+	}
+
+	// T009: Initialize transaction tracking
+	var transactions []TransactionRecord
+
+	// T011-T014: NFT Ownership Verification
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
+		}, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	// Query NFT ownership
+	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
+	if err != nil {
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to verify NFT ownership: %v", err),
+		}, fmt.Errorf("failed to verify NFT ownership: %w", err)
+	}
+
+	owner := ownerResult[0].(common.Address)
+	if owner != b.myAddr {
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
+		}, fmt.Errorf("NFT not owned by wallet")
+	}
+
+	// T015-T023: NFT Approval Check and Execution
+	approvalResult, err := nftManagerClient.Call(&b.myAddr, "getApproved", nftTokenID)
+	if err != nil {
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to check NFT approval: %v", err),
+		}, fmt.Errorf("failed to check NFT approval: %w", err)
+	}
+
+	currentApproval := approvalResult[0].(common.Address)
+
+	// Only approve if not already approved for this gauge
+	if currentApproval.Hex() != gauge {
+		log.Printf("Approving NFT %s for gauge %s", nftTokenID.String(), gauge)
+
+		approveTxHash, err := nftManagerClient.Send(
+			types.Standard,
+			nil, // Use automatic gas limit estimation
+			&b.myAddr,
+			b.privateKey,
+			"approve",
+			common.HexToAddress(gauge),
+			nftTokenID,
+		)
+		if err != nil {
+			return &StakingResult{
+				NFTTokenID:   nftTokenID,
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("failed to approve NFT: %v", err),
+			}, fmt.Errorf("failed to approve NFT: %w", err)
+		}
+
+		// Wait for approval confirmation
+		approvalReceipt, err := b.tl.WaitForTransaction(approveTxHash)
+		if err != nil {
+			return &StakingResult{
+				NFTTokenID:   nftTokenID,
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("NFT approval transaction failed: %v", err),
+			}, fmt.Errorf("NFT approval transaction failed: %w", err)
+		}
+
+		// Track approval transaction
+		gasCost, err := util.ExtractGasCost(approvalReceipt)
+		if err != nil {
+			return &StakingResult{
+				NFTTokenID:   nftTokenID,
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("failed to extract approval gas cost: %v", err),
+			}, fmt.Errorf("failed to extract approval gas cost: %w", err)
+		}
+
+		gasPrice := new(big.Int)
+		gasPrice.SetString(approvalReceipt.EffectiveGasPrice, 0)
+		gasUsed := new(big.Int)
+		gasUsed.SetString(approvalReceipt.GasUsed, 0)
+
+		transactions = append(transactions, TransactionRecord{
+			TxHash:    approveTxHash,
+			GasUsed:   gasUsed.Uint64(),
+			GasPrice:  gasPrice,
+			GasCost:   gasCost,
+			Timestamp: time.Now(),
+			Operation: "ApproveNFT",
+		})
+	} else {
+		log.Printf("NFT already approved for gauge, skipping approval")
+	}
+
+	// T024-T030: Gauge Deposit Execution
+	gaugeClient, err := b.Client(gauge)
+	if err != nil {
+		// Return with partial transaction records if approval was sent
+		totalGasCost := big.NewInt(0)
+		for _, tx := range transactions {
+			totalGasCost.Add(totalGasCost, tx.GasCost)
+		}
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Transactions: transactions,
+			TotalGasCost: totalGasCost,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get gauge client: %v", err),
+		}, fmt.Errorf("failed to get gauge client: %w", err)
+	}
+
+	// Submit deposit transaction
+	log.Printf("Depositing NFT %s into gauge %s", nftTokenID.String(), gauge)
+
+	depositTxHash, err := gaugeClient.Send(
+		types.Standard,
+		nil, // Use automatic gas limit estimation
+		&b.myAddr,
+		b.privateKey,
+		"deposit",
+		nftTokenID, // Token ID is the "amount" parameter
+	)
+	if err != nil {
+		totalGasCost := big.NewInt(0)
+		for _, tx := range transactions {
+			totalGasCost.Add(totalGasCost, tx.GasCost)
+		}
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Transactions: transactions,
+			TotalGasCost: totalGasCost,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to submit deposit transaction: %v", err),
+		}, fmt.Errorf("failed to submit deposit transaction: %w", err)
+	}
+
+	// Wait for deposit confirmation
+	depositReceipt, err := b.tl.WaitForTransaction(depositTxHash)
+	if err != nil {
+		totalGasCost := big.NewInt(0)
+		for _, tx := range transactions {
+			totalGasCost.Add(totalGasCost, tx.GasCost)
+		}
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Transactions: transactions,
+			TotalGasCost: totalGasCost,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("deposit transaction failed: %v", err),
+		}, fmt.Errorf("deposit transaction failed: %w", err)
+	}
+
+	// Track deposit transaction
+	gasCost, err := util.ExtractGasCost(depositReceipt)
+	if err != nil {
+		totalGasCost := big.NewInt(0)
+		for _, tx := range transactions {
+			totalGasCost.Add(totalGasCost, tx.GasCost)
+		}
+		return &StakingResult{
+			NFTTokenID:   nftTokenID,
+			Transactions: transactions,
+			TotalGasCost: totalGasCost,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to extract deposit gas cost: %v", err),
+		}, fmt.Errorf("failed to extract deposit gas cost: %w", err)
+	}
+
+	gasPrice := new(big.Int)
+	gasPrice.SetString(depositReceipt.EffectiveGasPrice, 0)
+	gasUsed := new(big.Int)
+	gasUsed.SetString(depositReceipt.GasUsed, 0)
+
+	transactions = append(transactions, TransactionRecord{
+		TxHash:    depositTxHash,
+		GasUsed:   gasUsed.Uint64(),
+		GasPrice:  gasPrice,
+		GasCost:   gasCost,
+		Timestamp: time.Now(),
+		Operation: "DepositNFT",
+	})
+
+	// T031-T037: Result Construction and Gas Tracking
+	totalGasCost := big.NewInt(0)
+	for _, tx := range transactions {
+		totalGasCost.Add(totalGasCost, tx.GasCost)
+	}
+
+	result := &StakingResult{
+		NFTTokenID:     nftTokenID,
+		ActualAmount0:  big.NewInt(0), // Not populated by Stake
+		ActualAmount1:  big.NewInt(0), // Not populated by Stake
+		FinalTickLower: 0,             // Not populated by Stake
+		FinalTickUpper: 0,             // Not populated by Stake
+		Transactions:   transactions,
+		TotalGasCost:   totalGasCost,
+		Success:        true,
+		ErrorMessage:   "",
+	}
+
+	// T038-T043: Logging and User Feedback
+	fmt.Printf("✓ NFT staked successfully\n")
+	fmt.Printf("  Token ID: %s\n", nftTokenID.String())
+	fmt.Printf("  Gauge: %s\n", gauge)
+	fmt.Printf("  Total Gas Cost: %s wei\n", totalGasCost.String())
+	for _, tx := range transactions {
+		fmt.Printf("  - %s: %s (gas: %s wei)\n", tx.Operation, tx.TxHash.Hex(), tx.GasCost.String())
+	}
+
+	return result, nil
+}
+
+func MintNftTokenId(nftManagerClient ContractClient, mintReceipt *types.TxReceipt) *big.Int {
+	nftTokenID := big.NewInt(0) // Default fallback
+	// Parse receipt to extract events
+	eventsJson, err := nftManagerClient.ParseReceipt(mintReceipt)
+	if err != nil {
+		log.Printf("Warning: Failed to parse mint receipt for token ID: %v", err)
+	} else {
+		// Parse the JSON to find Transfer event
+		var events []map[string]interface{}
+		if err := json.Unmarshal([]byte(eventsJson), &events); err == nil {
+			for _, event := range events {
+				if eventName, ok := event["EventName"].(string); ok && eventName == "Transfer" {
+					if params, ok := event["Parameter"].(map[string]interface{}); ok {
+						// Check if this is a mint (from zero address to recipient)
+						if fromAddr, ok := params["from"].(string); ok {
+							zeroAddr := common.Address{}
+							if fromAddr == "0x0000000000000000000000000000000000000000" || fromAddr == zeroAddr.Hex() {
+								// Extract tokenId from the Transfer event
+								if tokenIdVal, ok := params["tokenId"]; ok {
+									switch v := tokenIdVal.(type) {
+									case *big.Int:
+										nftTokenID = v
+									case float64:
+										nftTokenID = big.NewInt(int64(v))
+									case string:
+										if tokenIdBig, ok := new(big.Int).SetString(v, 10); ok {
+											nftTokenID = tokenIdBig
+										}
+									}
+									log.Printf("Extracted NFT token ID from mint receipt: %s", nftTokenID.String())
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nftTokenID
 }

@@ -4,6 +4,7 @@ import (
 	"blackholego/internal/util"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"testing"
 
@@ -84,7 +85,7 @@ func TestDecodeTransaction(t *testing.T) {
 
 func TestCallTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.globalstate.local")
+	err := godotenv.Load("env/.env.INonfungiblePositionManager.local")
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}
@@ -95,10 +96,10 @@ func TestCallTransaction(t *testing.T) {
 		t.Fatal("CONTRACT_ADDR not set in .env.test.local")
 	}
 
-	// callerAddr := os.Getenv("CALLER_ADDR")
-	// if contractAddr == "" {
-	// 	t.Fatal("CALLER_ADDR not set in .env.test.local")
-	// }
+	callerAddr := os.Getenv("CALLER_ADDR")
+	if contractAddr == "" {
+		t.Fatal("CALLER_ADDR not set in .env.test.local")
+	}
 
 	rpcURL := os.Getenv("RPC_URL")
 	if rpcURL == "" {
@@ -123,28 +124,47 @@ func TestCallTransaction(t *testing.T) {
 	}
 	cc := NewContractClient(client, common.HexToAddress(contractAddr), abi)
 
-	t.Run("safelyGetStateOfAMM", func(t *testing.T) {
+	t.Run("IAlgebraPoolState", func(t *testing.T) {
+		t.Run("safelyGetStateOfAMM", func(t *testing.T) { // IAlgebraPoolState
 
-		// temp := common.HexToAddress(callerAddr)
-		outputs, err := cc.Call(nil, "safelyGetStateOfAMM")
-		if err != nil {
-			t.Fatal(err)
-		}
+			// temp := common.HexToAddress(callerAddr)
+			outputs, err := cc.Call(nil, "safelyGetStateOfAMM")
+			if err != nil {
+				t.Fatal(err)
+			}
 
-		t.Logf("safelyGetStateOfAMM outputs:%v", outputs)
-		// [304014154377809408260091 -249428 500 2 1514349024952878554 -249398 -249433]
+			t.Logf("safelyGetStateOfAMM outputs:%v", outputs)
+			// [304014154377809408260091 -249428 500 2 1514349024952878554 -249398 -249433]
+		})
+
+		t.Run("tickSpacing", func(t *testing.T) { // IAlgebraPoolState
+
+			// temp := common.HexToAddress(callerAddr)
+			outputs, err := cc.Call(nil, "tickSpacing")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("safelyGetStateOfAMM outputs:%v", outputs)
+			// [304014154377809408260091 -249428 500 2 1514349024952878554 -249398 -249433]
+		})
 	})
 
-	t.Run("tickSpacing", func(t *testing.T) {
+	t.Run("INonfungiblePositionManager", func(t *testing.T) {
+		t.Run("tokenOfOwnerByIndex", func(t *testing.T) {
 
-		// temp := common.HexToAddress(callerAddr)
-		outputs, err := cc.Call(nil, "tickSpacing")
-		if err != nil {
-			t.Fatal(err)
-		}
+			outputs, err := cc.Call(nil, "tokenOfOwnerByIndex", common.HexToAddress(callerAddr), big.NewInt(2))
+			if err != nil {
+				t.Fatal(err)
+			}
 
-		t.Logf("safelyGetStateOfAMM outputs:%v", outputs)
-		// [304014154377809408260091 -249428 500 2 1514349024952878554 -249398 -249433]
+			t.Logf("tokenOfOwnerByIndex outputs:%v", outputs)
+			/*
+				0 - 1280668
+				1 - 1336530
+				2 - 1524053
+			*/
+		})
 	})
 
 }
