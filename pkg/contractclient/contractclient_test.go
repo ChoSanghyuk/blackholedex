@@ -80,29 +80,6 @@ func TestDecodeTransaction(t *testing.T) {
 		t.Logf("Decoded transaction:\n%s", string(jsonData))
 	})
 
-	// t.Run("decode_hex_string", func(t *testing.T) {
-
-	// 	codec := NewContractClient(nil, common.HexToAddress(contractAddr), &abi)
-
-	// 	// transfer(address,uint256) - with 0x prefix
-	// 	hexData := "0xa9059cbb0000000000000000000000006e4141d33021b52c91c28608403db4a0ffb50ec600000000000000000000000000000000000000000000000000000000000f4240"
-
-	// 	decoded, err := codec.DecodeTransactionHex(hexData)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-
-	// 	if decoded.MethodName != "transfer" {
-	// 		t.Errorf("expected method name 'transfer', got '%s'", decoded.MethodName)
-	// 	}
-
-	// 	decodedJSON, err := json.MarshalIndent(decoded, "", "  ")
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-	// 	t.Logf("Decoded from hex:\n%s", string(decodedJSON))
-	// })
-
 }
 
 func TestCallTransaction(t *testing.T) {
