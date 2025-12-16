@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"time"
 
@@ -14,13 +15,14 @@ import (
 
 const (
 	// # Contract addresses
-	routerv2       = "0x04E1dee021Cd12bBa022A72806441B43d8212Fec"
-	usdc           = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
-	wavax          = "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"
-	black          = "0xcd94a87696fac69edae3a70fe5725307ae1c43f6"
-	wavaxBlackPair = "0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573" //
-	wavaxUsdcPair  = "0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0"
-	deployer       = "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
+	routerv2                   = "0x04E1dee021Cd12bBa022A72806441B43d8212Fec"
+	usdc                       = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+	wavax                      = "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"
+	black                      = "0xcd94a87696fac69edae3a70fe5725307ae1c43f6"
+	wavaxBlackPair             = "0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573" //
+	wavaxUsdcPair              = "0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0"
+	deployer                   = "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
+	nonfungiblePositionManager = "0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"
 )
 
 // Blackhole manages interactions with Blackhole DEX contracts
@@ -35,7 +37,7 @@ func (b Blackhole) Client(address string) (ContractClient, error) {
 
 	c := b.ccm[address]
 	if c == nil {
-		return nil, errors.New("no mapped client")
+		return nil, errors.New("no mapped client") // todo. 없으면 생성.
 	}
 	return c, nil
 }
@@ -136,31 +138,292 @@ func (b *Blackhole) GetAMMState(poolAddress common.Address) (*AMMState, error) {
 	return state, nil
 }
 
-func (b *Blackhole) Mint(token0 *common.Address, token1 *common.Address, maxP *big.Int, slp *big.Int) (*common.Hash, error) {
-	clg := 200 // CL Gap
-	lpg := 3   // Liquidity Providing Gap
-
-	state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+// validateBalances validates wallet has sufficient token balances
+// Returns error if insufficient balance, nil otherwise
+func (b *Blackhole) validateBalances(requiredWAVAX, requiredUSDC *big.Int) error {
+	wavaxClient, err := b.Client(wavax)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to get WAVAX client: %w", err)
 	}
 
-	tickLower := (int(state.Tick)/clg - lpg) * 200
-	tickUpper := (int(state.Tick)/clg + lpg) * 200
+	usdcClient, err := b.Client(usdc)
+	if err != nil {
+		return fmt.Errorf("failed to get USDC client: %w", err)
+	}
 
+	// Query WAVAX balance
+	wavaxResult, err := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	if err != nil {
+		return fmt.Errorf("failed to get WAVAX balance: %w", err)
+	}
+	wavaxBalance := wavaxResult[0].(*big.Int)
+
+	// Query USDC balance
+	usdcResult, err := usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	if err != nil {
+		return fmt.Errorf("failed to get USDC balance: %w", err)
+	}
+	usdcBalance := usdcResult[0].(*big.Int)
+
+	// Validate WAVAX balance
+	if wavaxBalance.Cmp(requiredWAVAX) < 0 {
+		return fmt.Errorf("insufficient WAVAX balance: have %s, need %s",
+			wavaxBalance.String(), requiredWAVAX.String())
+	}
+
+	// Validate USDC balance
+	if usdcBalance.Cmp(requiredUSDC) < 0 {
+		return fmt.Errorf("insufficient USDC balance: have %s, need %s",
+			usdcBalance.String(), requiredUSDC.String())
+	}
+
+	return nil
+}
+
+// ensureApproval ensures token approval exists, optimizing to reuse existing allowances
+// Returns transaction hash (zero if approval not needed), or error
+func (b *Blackhole) ensureApproval(
+	tokenClient ContractClient,
+	spender common.Address,
+	requiredAmount *big.Int,
+) (common.Hash, error) {
+	// Check existing allowance
+	result, err := tokenClient.Call(&b.myAddr, "allowance", b.myAddr, spender)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("failed to check allowance: %w", err)
+	}
+
+	currentAllowance := result[0].(*big.Int)
+
+	// Only approve if insufficient
+	if currentAllowance.Cmp(requiredAmount) >= 0 {
+		// Sufficient allowance already exists
+		return common.Hash{}, nil
+	}
+
+	// Approve required amount
+	txHash, err := tokenClient.Send(
+		types.Standard,
+		nil, // Use automatic gas limit estimation
+		&b.myAddr,
+		b.privateKey,
+		"approve",
+		spender,
+		requiredAmount,
+	)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("failed to approve tokens: %w", err)
+	}
+
+	return txHash, nil
+}
+
+// Mint stakes liquidity in WAVAX-USDC pool with automatic position calculation
+// maxWAVAX: Maximum WAVAX amount to stake (wei)
+// maxUSDC: Maximum USDC amount to stake (smallest unit)
+// rangeWidth: Position range width (e.g., 6 = ±3 tick ranges)
+// slippagePct: Slippage tolerance percentage (e.g., 5 = 5%)
+// Returns StakingResult with all transaction details and position info
+func (b *Blackhole) Mint(
+	maxWAVAX *big.Int,
+	maxUSDC *big.Int,
+	rangeWidth int,
+	slippagePct int,
+) (*StakingResult, error) {
+	const tickSpacing = 200
+
+	// T012: Input validation
+	if err := util.ValidateStakingRequest(maxWAVAX, maxUSDC, rangeWidth, slippagePct); err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("validation failed: %v", err),
+		}, err
+	}
+
+	// Initialize transaction tracking
+	var transactions []TransactionRecord
+
+	// T013: Query pool state
+	state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to query pool state: %v", err),
+		}, fmt.Errorf("failed to query pool state: %w", err)
+	}
+
+	// T014: Calculate tick bounds
+	tickLower, tickUpper, err := util.CalculateTickBounds(state.Tick, rangeWidth, tickSpacing)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to calculate tick bounds: %v", err),
+		}, fmt.Errorf("failed to calculate tick bounds: %w", err)
+	}
+
+	// T015: Calculate optimal amounts using existing ComputeAmounts utility
+	amount0Desired, amount1Desired, _ := util.ComputeAmounts(
+		state.SqrtPrice,
+		int(state.Tick),
+		int(tickLower),
+		int(tickUpper),
+		maxWAVAX,
+		maxUSDC,
+	)
+
+	// T033: Compare actual vs desired amounts for capital efficiency
+	// T034: Calculate and log capital utilization percentages
+	utilization0 := new(big.Int).Mul(amount0Desired, big.NewInt(100)) // (amount0Desired / maxWAVAX) * 100. 최대 가능 금액 대비 staking되는 금액의 비율
+	utilization0.Div(utilization0, maxWAVAX)
+	utilization1 := new(big.Int).Mul(amount1Desired, big.NewInt(100))
+	utilization1.Div(utilization1, maxUSDC)
+
+	log.Printf("Capital Utilization: WAVAX %d%%, USDC %d%%",
+		utilization0.Int64(), utilization1.Int64())
+
+	// T032: Warn if >10% of either token will be unused (capital efficiency warning)
+	wastedWAVAX := new(big.Int).Sub(maxWAVAX, amount0Desired)
+	wastedUSDC := new(big.Int).Sub(maxUSDC, amount1Desired)
+
+	if utilization0.Cmp(big.NewInt(90)) < 0 { // Less than 90% utilized = >10% wasted
+		wastePercent := new(big.Int).Mul(wastedWAVAX, big.NewInt(100))
+		wastePercent.Div(wastePercent, maxWAVAX)
+		log.Printf("⚠️  Capital Efficiency Warning: %d%% of WAVAX (%s wei) will not be staked. Consider adjusting amounts or range width.",
+			wastePercent.Int64(), wastedWAVAX.String())
+	}
+	if utilization1.Cmp(big.NewInt(90)) < 0 { // Less than 90% utilized = >10% wasted
+		wastePercent := new(big.Int).Mul(wastedUSDC, big.NewInt(100))
+		wastePercent.Div(wastePercent, maxUSDC)
+		log.Printf("⚠️  Capital Efficiency Warning: %d%% of USDC (%s smallest unit) will not be staked. Consider adjusting amounts or range width.",
+			wastePercent.Int64(), wastedUSDC.String())
+	}
+
+	// T016: Validate balances
+	if err := b.validateBalances(amount0Desired, amount1Desired); err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("balance validation failed: %v", err),
+		}, fmt.Errorf("balance validation failed: %w", err)
+	}
+
+	// T017: Calculate slippage protection
+	amount0Min := util.CalculateMinAmount(amount0Desired, slippagePct)
+	amount1Min := util.CalculateMinAmount(amount1Desired, slippagePct)
+
+	// Get contract clients
 	wavaxClient, err := b.Client(wavax)
-	outputs, err := wavaxClient.Call(&b.myAddr, "balanceOf")
-	wavaxBalace := outputs[0].(*big.Int)
-	// wavaxMax := wavaxBalace.Sub()
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get WAVAX client: %v", err),
+		}, fmt.Errorf("failed to get WAVAX client: %w", err)
+	}
 
 	usdcClient, err := b.Client(usdc)
-	outputs, err = usdcClient.Call(&b.myAddr, "balanceOf")
-	usdcBalace := outputs[0].(*big.Int)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get USDC client: %v", err),
+		}, fmt.Errorf("failed to get USDC client: %w", err)
+	}
 
-	amount0Desired, amount1Desired, _ := util.ComputeAmounts(state.SqrtPrice, int(state.Tick), tickLower, tickUpper, wavaxBalace, usdcBalace)
+	nftManagerAddr := common.HexToAddress(nonfungiblePositionManager)
 
+	// T018: WAVAX approval
+	wavaxApproveTxHash, err := b.ensureApproval(wavaxClient, nftManagerAddr, amount0Desired)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to approve WAVAX: %v", err),
+		}, fmt.Errorf("failed to approve WAVAX: %w", err)
+	}
+
+	// Wait for WAVAX approval if transaction was sent
+	if wavaxApproveTxHash != (common.Hash{}) {
+		receipt, err := b.tl.WaitForTransaction(wavaxApproveTxHash)
+		if err != nil {
+			return &StakingResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("WAVAX approval transaction failed: %v", err),
+			}, fmt.Errorf("WAVAX approval transaction failed: %w", err)
+		}
+
+		// T024: Extract gas cost
+		gasCost, err := util.ExtractGasCost(receipt)
+		if err != nil {
+			return &StakingResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
+			}, fmt.Errorf("failed to extract gas cost: %w", err)
+		}
+
+		// Parse gas price for record
+		gasPrice := new(big.Int)
+		gasPrice.SetString(receipt.EffectiveGasPrice, 0)
+
+		// Parse gas used
+		gasUsed := new(big.Int)
+		gasUsed.SetString(receipt.GasUsed, 0)
+
+		transactions = append(transactions, TransactionRecord{
+			TxHash:    wavaxApproveTxHash,
+			GasUsed:   gasUsed.Uint64(),
+			GasPrice:  gasPrice,
+			GasCost:   gasCost,
+			Timestamp: time.Now(),
+			Operation: "ApproveWAVAX",
+		})
+	}
+
+	// T019: USDC approval
+	usdcApproveTxHash, err := b.ensureApproval(usdcClient, nftManagerAddr, amount1Desired)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to approve USDC: %v", err),
+		}, fmt.Errorf("failed to approve USDC: %w", err)
+	}
+
+	// Wait for USDC approval if transaction was sent
+	if usdcApproveTxHash != (common.Hash{}) {
+		receipt, err := b.tl.WaitForTransaction(usdcApproveTxHash)
+		if err != nil {
+			return &StakingResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("USDC approval transaction failed: %v", err),
+			}, fmt.Errorf("USDC approval transaction failed: %w", err)
+		}
+
+		// Extract gas cost
+		gasCost, err := util.ExtractGasCost(receipt)
+		if err != nil {
+			return &StakingResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
+			}, fmt.Errorf("failed to extract gas cost: %w", err)
+		}
+
+		// Parse gas price for record
+		gasPrice := new(big.Int)
+		gasPrice.SetString(receipt.EffectiveGasPrice, 0)
+
+		// Parse gas used
+		gasUsed := new(big.Int)
+		gasUsed.SetString(receipt.GasUsed, 0)
+
+		transactions = append(transactions, TransactionRecord{
+			TxHash:    usdcApproveTxHash,
+			GasUsed:   gasUsed.Uint64(),
+			GasPrice:  gasPrice,
+			GasCost:   gasCost,
+			Timestamp: time.Now(),
+			Operation: "ApproveUSDC",
+		})
+	}
+
+	// T020: Construct MintParams
 	deadline := big.NewInt(time.Now().Add(20 * time.Minute).Unix())
-	params := &MintParams{
+	mintParams := &MintParams{
 		Token0:         common.HexToAddress(wavax),
 		Token1:         common.HexToAddress(usdc),
 		Deployer:       common.HexToAddress(deployer),
@@ -168,13 +431,103 @@ func (b *Blackhole) Mint(token0 *common.Address, token1 *common.Address, maxP *b
 		TickUpper:      big.NewInt(int64(tickUpper)),
 		Amount0Desired: amount0Desired,
 		Amount1Desired: amount1Desired,
-		Amount0Min:     amount0Desired.Mul(amount0Desired, big.NewInt(100-slp.Int64())).Div(amount0Desired, big.NewInt(100)),
-		Amount1Min:     amount1Desired.Mul(amount1Desired, big.NewInt(100-slp.Int64())).Div(amount0Desired, big.NewInt(100)),
+		Amount0Min:     amount0Min,
+		Amount1Min:     amount1Min,
 		Recipient:      b.myAddr,
 		Deadline:       deadline,
 	}
-	_ = params
 
-	return nil, nil
-	// t.Logf("MintParams : %v\n", params)
+	// T021: Get NonfungiblePositionManager client
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
+		}, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	// T022: Submit mint transaction
+	mintTxHash, err := nftManagerClient.Send(
+		types.Standard,
+		nil, // Use automatic gas limit estimation
+		&b.myAddr,
+		b.privateKey,
+		"mint",
+		mintParams,
+	)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to submit mint transaction: %v", err),
+		}, fmt.Errorf("failed to submit mint transaction: %w", err)
+	}
+
+	// T023: Wait for mint confirmation
+	mintReceipt, err := b.tl.WaitForTransaction(mintTxHash)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("mint transaction failed: %v", err),
+		}, fmt.Errorf("mint transaction failed: %w", err)
+	}
+
+	// Extract gas cost for mint
+	mintGasCost, err := util.ExtractGasCost(mintReceipt)
+	if err != nil {
+		return &StakingResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to extract mint gas cost: %v", err),
+		}, fmt.Errorf("failed to extract mint gas cost: %w", err)
+	}
+
+	// Parse gas price for record
+	mintGasPrice := new(big.Int)
+	mintGasPrice.SetString(mintReceipt.EffectiveGasPrice, 0)
+
+	// Parse gas used
+	mintGasUsed := new(big.Int)
+	mintGasUsed.SetString(mintReceipt.GasUsed, 0)
+
+	transactions = append(transactions, TransactionRecord{
+		TxHash:    mintTxHash,
+		GasUsed:   mintGasUsed.Uint64(),
+		GasPrice:  mintGasPrice,
+		GasCost:   mintGasCost,
+		Timestamp: time.Now(),
+		Operation: "Mint",
+	})
+
+	// T025: Parse NFT token ID from receipt (simplified - would need proper event parsing)
+	// For now, using placeholder - in production would parse Transfer event
+	nftTokenID := big.NewInt(0) // TODO: Parse from mint receipt events
+
+	// T026: Construct StakingResult
+	totalGasCost := big.NewInt(0)
+	for _, tx := range transactions {
+		totalGasCost.Add(totalGasCost, tx.GasCost)
+	}
+
+	result := &StakingResult{
+		NFTTokenID:     nftTokenID,
+		ActualAmount0:  amount0Desired, // Actual amounts would be in mint receipt
+		ActualAmount1:  amount1Desired,
+		FinalTickLower: tickLower,
+		FinalTickUpper: tickUpper,
+		Transactions:   transactions,
+		TotalGasCost:   totalGasCost,
+		Success:        true,
+		ErrorMessage:   "",
+	}
+
+	// T028: Transaction logging
+	fmt.Printf("✓ Liquidity staked successfully\n")
+	fmt.Printf("  Position: Tick %d to %d\n", tickLower, tickUpper)
+	fmt.Printf("  WAVAX: %s wei\n", amount0Desired.String())
+	fmt.Printf("  USDC: %s\n", amount1Desired.String())
+	fmt.Printf("  Total Gas Cost: %s wei\n", totalGasCost.String())
+	for _, tx := range transactions {
+		fmt.Printf("  - %s: %s (gas: %s wei)\n", tx.Operation, tx.TxHash.Hex(), tx.GasCost.String())
+	}
+
+	return result, nil
 }

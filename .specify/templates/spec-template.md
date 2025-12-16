@@ -80,12 +80,20 @@
 <!--
   ACTION REQUIRED: The content in this section represents placeholders.
   Fill them out with the right functional requirements.
+
+  IMPORTANT: All requirements MUST comply with project constitution (.specify/memory/constitution.md).
+  Specifically check:
+  - Principle 1: WAVAX/USDC pool scope only
+  - Principle 2: Autonomous operation where applicable
+  - Principle 3: Financial tracking and transparency
+  - Principle 4: Gas optimization considerations
+  - Principle 5: Fail-safe error handling and safety
 -->
 
 ### Functional Requirements
 
 - **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
+- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]
 - **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
 - **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
 - **FR-005**: System MUST [behavior, e.g., "log all security events"]
@@ -94,6 +102,15 @@
 
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
+
+### Constitutional Compliance
+
+This feature MUST adhere to the following constitutional constraints:
+
+- **Scope**: Operations limited to WAVAX/USDC pool on Blackhole DEX (Principle 1)
+- **Safety**: All operations include fail-safe error handling and rollback mechanisms (Principle 5)
+- **Transparency**: Financial impacts (gas, fees, profits) must be tracked and reportable (Principle 3)
+- **Efficiency**: Gas costs must be minimized through batching and thresholds (Principle 4)
 
 ### Key Entities *(include if feature involves data)*
 

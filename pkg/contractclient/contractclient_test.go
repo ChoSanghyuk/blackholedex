@@ -14,7 +14,7 @@ import (
 
 func TestDecodeTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.test.local")
+	err := godotenv.Load("env/.env.mint.local")
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}

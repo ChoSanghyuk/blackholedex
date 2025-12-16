@@ -2,6 +2,16 @@
 
 Auto-generated from all feature plans. Last updated: [DATE]
 
+## Constitutional Principles
+
+This project is governed by `.specify/memory/constitution.md`. All development MUST adhere to:
+
+1. **Pool-Specific Scope**: WAVAX/USDC pool only on Blackhole DEX
+2. **Autonomous Rebalancing**: Continuous monitoring and automatic repositioning
+3. **Financial Transparency**: Track all costs (gas, fees) and profits (incentives)
+4. **Gas Optimization**: Minimize transaction costs through batching and thresholds
+5. **Fail-Safe Operation**: Comprehensive error handling, rollback, and safety mechanisms
+
 ## Active Technologies
 
 [EXTRACTED FROM ALL PLAN.MD FILES]

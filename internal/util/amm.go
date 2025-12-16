@@ -127,15 +127,16 @@ func ComputeAmounts(
 
 	// -------------------------------------------------------------------------
 	// CASE 1: Price <= tickLower → only token0 required
-	// amount0 = L * (sqrtPriceUpper - sqrtPriceLower) / (sqrtPriceLower * sqrtPriceUpper)
+	// amount0 = L * (sqrtPriceUpper - sqrtPriceLower) * Q96 / (sqrtPriceLower * sqrtPriceUpper)
 	// amount1 = 0
 	// -------------------------------------------------------------------------
 	if tick <= tickLower {
-		// L0 = amount0Max * (sqrtL * sqrtU) / (sqrtU - sqrtL)
+		// L0 = amount0Max * (sqrtL * sqrtU) / (sqrtU - sqrtL) / Q96
 		numer := new(big.Float).Mul(
 			new(big.Float).Mul(new(big.Float).SetInt(amount0Max), sL),
 			sU,
 		)
+		numer.Quo(numer, new(big.Float).SetInt(Q96))
 		denom := new(big.Float).Sub(sU, sL)
 
 		Lf := new(big.Float).Quo(numer, denom)
@@ -150,12 +151,13 @@ func ComputeAmounts(
 	// -------------------------------------------------------------------------
 	// CASE 3: Price >= tickUpper → only token1 required
 	// amount0 = 0
-	// amount1 = L * (sqrtPriceUpper - sqrtPriceLower)
+	// amount1 = L * (sqrtPriceUpper - sqrtPriceLower) / Q96
 	// -------------------------------------------------------------------------
 	if tick >= tickUpper {
-		// L1 = amount1Max / (sqrtU - sqrtL)
+		// L1 = amount1Max * Q96 / (sqrtU - sqrtL)
+		numer := new(big.Float).Mul(new(big.Float).SetInt(amount1Max), new(big.Float).SetInt(Q96))
 		denom := new(big.Float).Sub(sU, sL)
-		Lf := new(big.Float).Quo(new(big.Float).SetInt(amount1Max), denom)
+		Lf := new(big.Float).Quo(numer, denom)
 
 		L = new(big.Int)
 		Lf.Int(L)
@@ -167,25 +169,28 @@ func ComputeAmounts(
 
 	// -------------------------------------------------------------------------
 	// CASE 2: Price inside range → token0 + token1
-	// L0 = amount0 * sqrtPriceLower * sqrtPriceUpper / (sqrtPriceUpper - sqrtPriceLower)
-	// L1 = amount1 / (sqrtPriceUpper - sqrtPriceLower)
+	// For a position with range [tickLower, tickUpper] and current price sqrtP:
+	// L0 = amount0 * (sqrtP * sqrtU) / (sqrtU - sqrtP) / Q96
+	// L1 = amount1 * Q96 / (sqrtP - sqrtL)
 	// -------------------------------------------------------------------------
 
 	// Liquidity from amount0:
-	// L0 = amount0Max * (sqrtP * sqrtU) / (sqrtU - sqrtP)
+	// L0 = amount0Max * (sqrtP * sqrtU) / (sqrtU - sqrtP) / Q96
 	denom0 := new(big.Float).Sub(sU, sP)
 	numer0 := new(big.Float).Mul(
 		new(big.Float).Mul(new(big.Float).SetInt(amount0Max), sP),
 		sU,
 	)
+	numer0.Quo(numer0, new(big.Float).SetInt(Q96))
 	L0f := new(big.Float).Quo(numer0, denom0)
 	L0 := new(big.Int)
 	L0f.Int(L0)
 
 	// Liquidity from amount1:
-	// L1 = amount1Max / (sqrtP - sqrtL)
+	// L1 = amount1Max * Q96 / (sqrtP - sqrtL)
 	denom1 := new(big.Float).Sub(sP, sL)
-	L1f := new(big.Float).Quo(new(big.Float).SetInt(amount1Max), denom1)
+	numer1 := new(big.Float).Mul(new(big.Float).SetInt(amount1Max), new(big.Float).SetInt(Q96))
+	L1f := new(big.Float).Quo(numer1, denom1)
 	L1 := new(big.Int)
 	L1f.Int(L1)
 
@@ -199,18 +204,20 @@ func ComputeAmounts(
 	// Now compute actual required amounts using L.
 	Lf := new(big.Float).SetInt(L)
 
-	// amount0 = L * (sqrtU - sqrtP) / (sqrtP * sqrtU)
+	// amount0 = L * (sqrtU - sqrtP) * Q96 / (sqrtP * sqrtU)
 	{
 		numer := new(big.Float).Mul(Lf, new(big.Float).Sub(sU, sP))
+		numer.Mul(numer, new(big.Float).SetInt(Q96))
 		denom := new(big.Float).Mul(sP, sU)
 		a0f := new(big.Float).Quo(numer, denom)
 		amount0 = new(big.Int)
 		a0f.Int(amount0)
 	}
 
-	// amount1 = L * (sqrtP - sqrtL)
+	// amount1 = L * (sqrtP - sqrtL) / Q96
 	{
 		a1f := new(big.Float).Mul(Lf, new(big.Float).Sub(sP, sL))
+		a1f.Quo(a1f, new(big.Float).SetInt(Q96))
 		amount1 = new(big.Int)
 		a1f.Int(amount1)
 	}

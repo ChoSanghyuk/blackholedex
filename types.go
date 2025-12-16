@@ -2,6 +2,7 @@ package blackholedex
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -157,4 +158,29 @@ type AMMState struct {
 	ActiveLiquidity *big.Int `json:"activeLiquidity"` // uint128 - Active liquidity
 	NextTick        int32    `json:"nextTick"`        // int24 - Next initialized tick
 	PreviousTick    int32    `json:"previousTick"`    // int24 - Previous initialized tick
+}
+
+// Liquidity Staking types
+
+// TransactionRecord tracks individual transaction details for financial transparency
+type TransactionRecord struct {
+	TxHash    common.Hash // Transaction hash
+	GasUsed   uint64      // Gas consumed
+	GasPrice  *big.Int    // Effective gas price (wei)
+	GasCost   *big.Int    // Total gas cost (wei) = GasUsed * GasPrice
+	Timestamp time.Time   // Transaction timestamp
+	Operation string      // Operation type ("ApproveWAVAX", "ApproveUSDC", "Mint")
+}
+
+// StakingResult represents the complete output of staking operation
+type StakingResult struct {
+	NFTTokenID     *big.Int            // Liquidity position NFT token ID
+	ActualAmount0  *big.Int            // Actual WAVAX staked (wei)
+	ActualAmount1  *big.Int            // Actual USDC staked (smallest unit)
+	FinalTickLower int32               // Final lower tick bound
+	FinalTickUpper int32               // Final upper tick bound
+	Transactions   []TransactionRecord // All transactions executed
+	TotalGasCost   *big.Int            // Sum of all gas costs (wei)
+	Success        bool                // Whether operation succeeded
+	ErrorMessage   string              // Error message if failed (empty if success)
 }

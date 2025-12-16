@@ -31,7 +31,40 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+This feature MUST comply with all principles in `.specify/memory/constitution.md`. Check each principle:
+
+### Principle 1: Pool-Specific Scope
+- [ ] Feature operates ONLY on WAVAX/USDC pool
+- [ ] No support for other tokens or pools introduced
+- [ ] Contract addresses match constitution technical constraints
+
+### Principle 2: Autonomous Rebalancing
+- [ ] Monitoring capability included (if relevant)
+- [ ] Rebalancing logic maintains atomicity/rollback safety
+- [ ] Decision logic documented and testable
+
+### Principle 3: Financial Transparency
+- [ ] Gas tracking implemented for all transactions
+- [ ] Swap fees calculated and recorded
+- [ ] Incentives/rewards tracked
+- [ ] Profit/loss calculations accurate
+- [ ] Exportable reporting available
+
+### Principle 4: Gas Optimization
+- [ ] Rebalancing thresholds configured to prevent excessive transactions
+- [ ] Gas estimation used before transaction submission
+- [ ] Contract calls optimized (batch operations, minimal storage)
+- [ ] Approval reuse implemented where safe
+
+### Principle 5: Fail-Safe Operation
+- [ ] All external calls have timeout/retry logic
+- [ ] Transaction failures logged with full context
+- [ ] Partial failures trigger rollback or safe termination
+- [ ] Slippage protection enforced
+- [ ] Circuit breaker pattern implemented
+- [ ] Manual recovery documented
+
+**Violations**: List any principle violations with justification (must be approved via constitution amendment before proceeding)
 
 ## Project Structure
 

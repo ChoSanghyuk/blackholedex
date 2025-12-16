@@ -107,3 +107,10 @@ hash := common.HexToHash("0x...")
 - Avalanche RPC Providers: {todo: recommended providers}
 - Contract Verification: {todo: explorer links}
 
+
+## Active Technologies
+- Go 1.24.10 + github.com/ethereum/go-ethereum v1.16.7, existing internal packages (util, contractclient) (001-liquidity-staking)
+- N/A (blockchain state only, no local persistence) (001-liquidity-staking)
+
+## Recent Changes
+- 001-liquidity-staking: Added Go 1.24.10 + github.com/ethereum/go-ethereum v1.16.7, existing internal packages (util, contractclient)
