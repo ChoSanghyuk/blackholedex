@@ -770,6 +770,8 @@ func (b *Blackhole) Stake(
 	return result, nil
 }
 
+/**********************************************************************************************************************************************/
+
 func MintNftTokenId(nftManagerClient ContractClient, mintReceipt *types.TxReceipt) *big.Int {
 	nftTokenID := big.NewInt(0) // Default fallback
 	// Parse receipt to extract events

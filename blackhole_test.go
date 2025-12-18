@@ -213,6 +213,17 @@ func TestBlackhole(t *testing.T) {
 		t.Logf("Mint Result %v", rtn)
 	})
 
+	t.Run("Stake", func(t *testing.T) {
+
+		nftId := big.NewInt(1280668)
+		rtn, err := b.Stake(nftId)
+		if err != nil {
+			t.Fatalf("Stake failed: %v", err)
+		}
+
+		t.Logf("Stake Result %v", rtn)
+	})
+
 	t.Run("GetAMMState", func(t *testing.T) {
 
 		state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
