@@ -25,6 +25,8 @@ const (
 	deployer                   = "0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"
 	nonfungiblePositionManager = "0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"
 	gauge                      = "0x3ADE52f9779c07471F4B6d5997444C3c2124C1c0"
+	farmingCenter              = "0xa47Ad2C95FaE476a73b85A355A5855aDb4b3A449"
+	algebraPool                = "0x41100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7"
 )
 
 // Blackhole manages interactions with Blackhole DEX contracts
@@ -762,6 +764,208 @@ func (b *Blackhole) Stake(
 	fmt.Printf("✓ NFT staked successfully\n")
 	fmt.Printf("  Token ID: %s\n", nftTokenID.String())
 	fmt.Printf("  Gauge: %s\n", gauge)
+	fmt.Printf("  Total Gas Cost: %s wei\n", totalGasCost.String())
+	for _, tx := range transactions {
+		fmt.Printf("  - %s: %s (gas: %s wei)\n", tx.Operation, tx.TxHash.Hex(), tx.GasCost.String())
+	}
+
+	return result, nil
+}
+
+// Unstake withdraws a staked NFT position from FarmingCenter
+// nftTokenID: ERC721 token ID from previous Mint operation
+// incentiveKey: Identifies the farming program to exit
+// collectRewards: Whether to claim accumulated rewards during unstake
+// Returns UnstakeResult with transaction tracking and gas costs
+func (b *Blackhole) Unstake(
+	nftTokenID *big.Int,
+	nonce *big.Int, // nonce가 왜 3으로 고정되는거 같지???. todo. 1. nonce 확인 2. reward value에 0 넣는거 확인
+) (*UnstakeResult, error) {
+	// T006: Input validation - NFT token ID
+	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
+		return &UnstakeResult{
+			Success:      false,
+			ErrorMessage: "validation failed: invalid token ID",
+		}, fmt.Errorf("validation failed: invalid token ID")
+	}
+
+	// Initialize transaction tracking
+	var transactions []TransactionRecord
+
+	// T008: Verify NFT ownership
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
+		}, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to verify NFT ownership: %v", err),
+		}, fmt.Errorf("failed to verify NFT ownership: %w", err)
+	}
+
+	owner := ownerResult[0].(common.Address)
+	if owner != b.myAddr {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
+		}, fmt.Errorf("NFT not owned by wallet")
+	}
+
+	// T009: Verify NFT is currently farmed
+	farmingCenterClient, err := b.Client(farmingCenter)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get FarmingCenter client: %v", err),
+		}, fmt.Errorf("failed to get FarmingCenter client: %w", err)
+	}
+
+	depositsResult, err := farmingCenterClient.Call(&b.myAddr, "deposits", nftTokenID)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to check farming status: %v", err),
+		}, fmt.Errorf("failed to check farming status: %w", err)
+	}
+
+	currentIncentiveId := depositsResult[0].([32]byte)
+	if currentIncentiveId == [32]byte{} {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: "NFT is not currently staked in farming",
+		}, fmt.Errorf("NFT is not currently staked")
+	}
+
+	// T010: Build multicall data - encode exitFarming call
+	var multicallData [][]byte
+
+	incentiveKey := IncentiveKey{
+		RewardToken:      common.HexToAddress(black),
+		BonusRewardToken: common.HexToAddress(black),
+		Pool:             common.HexToAddress(algebraPool),
+		Nonce:            nonce,
+	}
+
+	farmingCenterABI := farmingCenterClient.Abi()
+	exitFarmingData, err := farmingCenterABI.Pack("exitFarming", incentiveKey, nftTokenID)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to encode exitFarming: %v", err),
+		}, fmt.Errorf("failed to encode exitFarming: %w", err)
+	}
+	multicallData = append(multicallData, exitFarmingData)
+
+	// T011: Conditionally encode collectRewards call
+	collectRewardsData, err := farmingCenterABI.Pack("claimReward", common.HexToAddress(black), b.myAddr, big.NewInt(0)) // todo. reward 0원인거 확인.
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to encode collectRewards: %v", err),
+		}, fmt.Errorf("failed to encode collectRewards: %w", err)
+	}
+	multicallData = append(multicallData, collectRewardsData)
+
+	// T012: Execute multicall transaction
+	log.Printf("Unstaking NFT %s from FarmingCenter %s", nftTokenID.String(), farmingCenter)
+
+	multicallTxHash, err := farmingCenterClient.Send(
+		types.Standard,
+		nil, // Use automatic gas limit estimation (Principle 4)
+		&b.myAddr,
+		b.privateKey,
+		"multicall",
+		multicallData,
+	)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to submit multicall transaction: %v", err),
+		}, fmt.Errorf("failed to submit multicall transaction: %w", err)
+	}
+
+	// T013: Wait for transaction confirmation and extract gas cost
+	multicallReceipt, err := b.tl.WaitForTransaction(multicallTxHash)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("multicall transaction failed: %v", err),
+		}, fmt.Errorf("multicall transaction failed: %w", err)
+	}
+
+	gasCost, err := util.ExtractGasCost(multicallReceipt)
+	if err != nil {
+		return &UnstakeResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
+		}, fmt.Errorf("failed to extract gas cost: %w", err)
+	}
+
+	gasPrice := new(big.Int)
+	gasPrice.SetString(multicallReceipt.EffectiveGasPrice, 0)
+	gasUsed := new(big.Int)
+	gasUsed.SetString(multicallReceipt.GasUsed, 0)
+
+	transactions = append(transactions, TransactionRecord{
+		TxHash:    multicallTxHash,
+		GasUsed:   gasUsed.Uint64(),
+		GasPrice:  gasPrice,
+		GasCost:   gasCost,
+		Timestamp: time.Now(),
+		Operation: "Unstake",
+	})
+
+	// T014: Parse reward amounts from multicall results (if collected)
+	// Note: Reward parsing from multicall results would require decoding the return data
+	// For now, we set rewards to default values - this should be enhanced with actual parsing
+	rewards := &RewardAmounts{
+		Reward:           big.NewInt(0),
+		BonusReward:      big.NewInt(0),
+		RewardToken:      incentiveKey.RewardToken,
+		BonusRewardToken: incentiveKey.BonusRewardToken,
+	}
+	// TODO: Parse actual reward amounts from multicallReceipt logs or return data
+	log.Printf("Rewards collected (parsing from receipt not yet implemented)")
+
+	// T015: Construct and return UnstakeResult
+	totalGasCost := big.NewInt(0)
+	for _, tx := range transactions {
+		totalGasCost.Add(totalGasCost, tx.GasCost)
+	}
+
+	result := &UnstakeResult{
+		NFTTokenID:   nftTokenID,
+		Rewards:      rewards,
+		Transactions: transactions,
+		TotalGasCost: totalGasCost,
+		Success:      true,
+		ErrorMessage: "",
+	}
+
+	// T016: Logging with troubleshooting context
+	fmt.Printf("✓ NFT unstaked successfully\n")
+	fmt.Printf("  Token ID: %s\n", nftTokenID.String())
+	fmt.Printf("  FarmingCenter: %s\n", farmingCenter)
+	if rewards != nil {
+		fmt.Printf("  Rewards: %s / %s\n", rewards.Reward.String(), rewards.BonusReward.String())
+	}
 	fmt.Printf("  Total Gas Cost: %s wei\n", totalGasCost.String())
 	for _, tx := range transactions {
 		fmt.Printf("  - %s: %s (gas: %s wei)\n", tx.Operation, tx.TxHash.Hex(), tx.GasCost.String())

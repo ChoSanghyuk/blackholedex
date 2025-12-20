@@ -1,6 +1,7 @@
 package blackholedex
 
 import (
+	"errors"
 	"math/big"
 	"time"
 
@@ -183,4 +184,57 @@ type StakingResult struct {
 	TotalGasCost   *big.Int            // Sum of all gas costs (wei)
 	Success        bool                // Whether operation succeeded
 	ErrorMessage   string              // Error message if failed (empty if success)
+}
+
+// Unstake types
+
+// IncentiveKey identifies a specific farming incentive program
+// Matches the Solidity struct: IncentiveKey from FarmingCenter.sol
+type IncentiveKey struct {
+	RewardToken      common.Address `json:"rewardToken"`      // Primary reward token address
+	BonusRewardToken common.Address `json:"bonusRewardToken"` // Bonus reward token address (can be zero)
+	Pool             common.Address `json:"pool"`             // WAVAX/USDC pool address
+	Nonce            *big.Int       `json:"nonce"`            // Incentive nonce/version
+}
+
+// RewardAmounts tracks rewards collected during unstake operation
+type RewardAmounts struct {
+	Reward           *big.Int       `json:"reward"`           // Primary reward amount
+	BonusReward      *big.Int       `json:"bonusReward"`      // Bonus reward amount
+	RewardToken      common.Address `json:"rewardToken"`      // Primary reward token address
+	BonusRewardToken common.Address `json:"bonusRewardToken"` // Bonus reward token address
+}
+
+// UnstakeResult represents the complete output of unstake operation
+type UnstakeResult struct {
+	NFTTokenID   *big.Int            // Unstaked NFT token ID
+	Rewards      *RewardAmounts      // Rewards collected (nil if not collected)
+	Transactions []TransactionRecord // All transactions executed
+	TotalGasCost *big.Int            // Sum of all gas costs (wei)
+	Success      bool                // Whether operation succeeded
+	ErrorMessage string              // Error message if failed (empty if success)
+}
+
+// UnstakeParams contains parameters for unstaking an NFT position
+type UnstakeParams struct {
+	NFTTokenID     *big.Int      `json:"nftTokenId"`     // ERC721 token ID
+	IncentiveKey   *IncentiveKey `json:"incentiveKey"`   // Farming incentive to exit
+	CollectRewards bool          `json:"collectRewards"` // Whether to collect rewards
+}
+
+// Validate checks if UnstakeParams are valid
+func (p *UnstakeParams) Validate() error {
+	if p.NFTTokenID == nil || p.NFTTokenID.Sign() <= 0 {
+		return errors.New("NFT token ID must be positive")
+	}
+	if p.IncentiveKey == nil {
+		return errors.New("IncentiveKey is required")
+	}
+	if p.IncentiveKey.Pool == (common.Address{}) {
+		return errors.New("Pool address cannot be zero")
+	}
+	if p.IncentiveKey.Nonce == nil {
+		return errors.New("Nonce cannot be nil")
+	}
+	return nil
 }

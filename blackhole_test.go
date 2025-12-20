@@ -114,6 +114,17 @@ func TestBlackhole(t *testing.T) {
 	}
 	gaugeClient := contractclient.NewContractClient(client, common.HexToAddress(gauge), gaugeABI)
 
+	// Create NFTPositionManager clients
+	farmingCenterABIPath := os.Getenv("FARMING_CENTER")
+	if erc20ABIPath == "" {
+		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	}
+	farmingCenterABI, err := util.LoadABI(farmingCenterABIPath)
+	if err != nil {
+		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+	}
+	farmingCenterClient := contractclient.NewContractClient(client, common.HexToAddress(farmingCenter), farmingCenterABI)
+
 	// Setup TxListener
 	listener := txlistener.NewTxListener(
 		client,
@@ -133,6 +144,7 @@ func TestBlackhole(t *testing.T) {
 			wavaxUsdcPair:              wausPoolClient,
 			nonfungiblePositionManager: nftPositionManagerClient,
 			gauge:                      gaugeClient,
+			farmingCenter:              farmingCenterClient,
 		},
 	}
 
@@ -217,6 +229,17 @@ func TestBlackhole(t *testing.T) {
 
 		nftId := big.NewInt(1280668)
 		rtn, err := b.Stake(nftId)
+		if err != nil {
+			t.Fatalf("Stake failed: %v", err)
+		}
+
+		t.Logf("Stake Result %v", rtn)
+	})
+
+	t.Run("Unstake", func(t *testing.T) {
+
+		nftId := big.NewInt(1280668)
+		rtn, err := b.Unstake(nftId, big.NewInt(3)) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
 		}

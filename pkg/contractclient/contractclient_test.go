@@ -85,7 +85,7 @@ func TestDecodeTransaction(t *testing.T) {
 
 func TestCallTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.INonfungiblePositionManager.local")
+	err := godotenv.Load("env/.env.IFarmingCenter.local")
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}
@@ -123,6 +123,10 @@ func TestCallTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	cc := NewContractClient(client, common.HexToAddress(contractAddr), abi)
+
+	t.Run("PrintFunctionSelectors", func(t *testing.T) {
+		cc.PrintFunctionSelectors()
+	})
 
 	t.Run("IAlgebraPoolState", func(t *testing.T) {
 		t.Run("safelyGetStateOfAMM", func(t *testing.T) { // IAlgebraPoolState

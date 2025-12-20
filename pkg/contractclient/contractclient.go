@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	contracttypes "blackholego/pkg/types"
 
@@ -340,6 +341,53 @@ func (cm *ContractClient) ContractAddress() *common.Address {
 
 func (cm *ContractClient) ChainId() *big.Int {
 	return cm.chainId
+}
+
+func (cm *ContractClient) Abi() *abi.ABI {
+	return cm.abi
+}
+
+// PrintFunctionSelectors prints a mapping of function selectors (method IDs) to function names
+// from the contract's ABI. This is useful for debugging and understanding contract interfaces.
+func (cm *ContractClient) PrintFunctionSelectors() {
+	fmt.Println("=== Function Selector Mapping ===")
+	fmt.Printf("Contract Address: %s\n\n", cm.contractAddress.Hex())
+	fmt.Printf("%-12s %-30s %s\n", "Selector", "Function Name", "Signature")
+	fmt.Println(strings.Repeat("-", 80))
+
+	// Iterate through all methods in the ABI
+	for name, method := range cm.abi.Methods {
+		// Get the 4-byte selector (method ID)
+		selector := hex.EncodeToString(method.ID)
+
+		// Build the full signature
+		signature := buildMethodSignature(&method)
+
+		// Print the mapping
+		fmt.Printf("0x%-10s %-30s %s\n", selector, name, signature)
+	}
+
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Printf("Total functions: %d\n", len(cm.abi.Methods))
+}
+
+// GetFunctionSelectors returns a map of function selectors to function information
+// Key: selector hex string (e.g., "a9059cbb")
+// Value: map with "name" and "signature" keys
+func (cm *ContractClient) GetFunctionSelectors() map[string]map[string]string {
+	selectors := make(map[string]map[string]string)
+
+	for name, method := range cm.abi.Methods {
+		selector := hex.EncodeToString(method.ID)
+		signature := buildMethodSignature(&method)
+
+		selectors[selector] = map[string]string{
+			"name":      name,
+			"signature": signature,
+		}
+	}
+
+	return selectors
 }
 
 func (cm *ContractClient) TransactionData(hash common.Hash) ([]byte, error) {

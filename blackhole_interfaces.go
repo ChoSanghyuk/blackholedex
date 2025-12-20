@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"math/big"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -13,6 +14,7 @@ type ContractClient interface {
 	TxSender
 	TxReader
 	TxDecoder
+	Abi() *abi.ABI
 }
 
 // TxSender defines methods for sending transactions to the blockchain
