@@ -179,7 +179,25 @@ Avalanche Blackhole Dex에 유동성 공급자로 참여하면서, 자동적으�
 
 
 ### unstake
-0x4e55f91cf25a2bd863027526607eaf62a327d86b0bfb7dedcae31ebcccba179f
+- tx
+  - 0x4e55f91cf25a2bd863027526607eaf62a327d86b0bfb7dedcae31ebcccba179f
+- tx data 분석
+  ```
+  # item 1
+  4473eca6                                                            # exitFarming 함수 선택자
+  000000000000000000000000cd94a87696fac69edae3a70fe5725307ae1c43f6    # black token
+  000000000000000000000000cd94a87696fac69edae3a70fe5725307ae1c43f6    # black token
+  00000000000000000000000041100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7    # AlgebraPool
+  0000000000000000000000000000000000000000000000000000000000000003    # Nonce
+  0000000000000000000000000000000000000000000000000000000000138a9c    # NFT ID
+
+  # item 2
+  2f2d783d                                                            # claimReward 함수 선택자
+  000000000000000000000000cd94a87696fac69edae3a70fe5725307ae1c43f6    # black token
+  000000000000000000000000b4dd4fb3d4bced984cce972991fb100488b59223    # my wallet
+  0000000000000000000000000000000000000000000000000000000000000000
+  ```
+
 
 
 

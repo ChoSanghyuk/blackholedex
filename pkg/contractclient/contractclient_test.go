@@ -85,7 +85,7 @@ func TestDecodeTransaction(t *testing.T) {
 
 func TestCallTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.IFarmingCenter.local")
+	err := godotenv.Load("env/.env.INonfungiblePositionManager.local")
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}

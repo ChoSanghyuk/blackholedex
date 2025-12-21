@@ -247,6 +247,16 @@ func TestBlackhole(t *testing.T) {
 		t.Logf("Stake Result %v", rtn)
 	})
 
+	t.Run("Withdraw", func(t *testing.T) {
+		nftId := big.NewInt(1280668)
+		rtn, err := b.Withdraw(nftId) // todo Nonce 구하는 법
+		if err != nil {
+			t.Fatalf("Withdraw failed: %v", err)
+		}
+
+		t.Logf("Withdraw Result %v", rtn)
+	})
+
 	t.Run("GetAMMState", func(t *testing.T) {
 
 		state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))

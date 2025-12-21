@@ -238,3 +238,33 @@ func (p *UnstakeParams) Validate() error {
 	}
 	return nil
 }
+
+// Withdraw types
+
+// WithdrawResult represents the complete output of withdrawal operation
+type WithdrawResult struct {
+	NFTTokenID   *big.Int            // Withdrawn NFT token ID
+	Amount0      *big.Int            // WAVAX withdrawn (wei)
+	Amount1      *big.Int            // USDC withdrawn (smallest unit)
+	Transactions []TransactionRecord // All transactions executed
+	TotalGasCost *big.Int            // Sum of all gas costs (wei)
+	Success      bool                // Whether operation succeeded
+	ErrorMessage string              // Error message if failed (empty if success)
+}
+
+// DecreaseLiquidityParams for decreaseLiquidity operation
+type DecreaseLiquidityParams struct {
+	TokenId    *big.Int `json:"tokenId"`
+	Liquidity  *big.Int `json:"liquidity"`   // uint128
+	Amount0Min *big.Int `json:"amount0Min"`
+	Amount1Min *big.Int `json:"amount1Min"`
+	Deadline   *big.Int `json:"deadline"`
+}
+
+// CollectParams for collect operation
+type CollectParams struct {
+	TokenId    *big.Int       `json:"tokenId"`
+	Recipient  common.Address `json:"recipient"`
+	Amount0Max *big.Int       `json:"amount0Max"` // uint128
+	Amount1Max *big.Int       `json:"amount1Max"` // uint128
+}

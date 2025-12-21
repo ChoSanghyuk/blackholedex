@@ -113,4 +113,5 @@ hash := common.HexToHash("0x...")
 - N/A (blockchain state only, no local persistence) (001-liquidity-staking)
 
 ## Recent Changes
+- 003-liquidity-withdraw: Added Withdraw function with multicall for atomic position exit and NFT burn (Go 1.24.10, go-ethereum v1.16.7)
 - 001-liquidity-staking: Added Go 1.24.10 + github.com/ethereum/go-ethereum v1.16.7, existing internal packages (util, contractclient)

@@ -777,9 +777,15 @@ func (b *Blackhole) Stake(
 // incentiveKey: Identifies the farming program to exit
 // collectRewards: Whether to claim accumulated rewards during unstake
 // Returns UnstakeResult with transaction tracking and gas costs
+
+/*
+memo. nonce = unique identifier for a farming program incentive.
+IncentiveKey에 대응되는 nonce 값을 사용해야만 함. 내 경우에는 3만을 사용.
+"incentiveKeys" 함수를 호출하면 내 incentiveId에 대응되는 nonce를 알 수 있음
+*/
 func (b *Blackhole) Unstake(
 	nftTokenID *big.Int,
-	nonce *big.Int, // nonce가 왜 3으로 고정되는거 같지???. todo. 1. nonce 확인 2. reward value에 0 넣는거 확인
+	nonce *big.Int,
 ) (*UnstakeResult, error) {
 	// T006: Input validation - NFT token ID
 	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
@@ -970,6 +976,197 @@ func (b *Blackhole) Unstake(
 	for _, tx := range transactions {
 		fmt.Printf("  - %s: %s (gas: %s wei)\n", tx.Operation, tx.TxHash.Hex(), tx.GasCost.String())
 	}
+
+	return result, nil
+}
+
+// Withdraw removes all liquidity from an NFT position and burns the NFT
+// nftTokenID: ERC721 token ID from previous Mint operation
+// Returns WithdrawResult with transaction tracking and gas costs
+func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
+	// T008: Input validation
+	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
+		return &WithdrawResult{
+			Success:      false,
+			ErrorMessage: "validation failed: NFT token ID must be positive",
+		}, fmt.Errorf("validation failed: NFT token ID must be positive")
+	}
+
+	// T009: Get nonfungiblePositionManager ContractClient
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
+		}, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	// T010: Verify NFT ownership
+	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to verify NFT ownership: %v", err),
+		}, fmt.Errorf("failed to verify NFT ownership: %w", err)
+	}
+
+	owner := ownerResult[0].(common.Address)
+	if owner != b.myAddr {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
+		}, fmt.Errorf("NFT not owned by wallet: owned by %s", owner.Hex())
+	}
+
+	// T011: Query position details to get liquidity amount
+	positionsResult, err := nftManagerClient.Call(&b.myAddr, "positions", nftTokenID)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to query position: %v", err),
+		}, fmt.Errorf("failed to query position: %w", err)
+	}
+
+	liquidity := positionsResult[7].(*big.Int) // uint128 liquidity at index 7
+
+	// T012-T016: Build multicall data
+	// The multicall will execute three operations atomically in this order:
+	// 1. decreaseLiquidity: Removes liquidity from the position (tokens become withdrawable)
+	// 2. collect: Actually transfers the tokens and fees to the recipient
+	// 3. burn: Destroys the NFT after all tokens are collected
+	// If any operation fails, the entire transaction reverts (atomicity guarantee)
+	var multicallData [][]byte
+	deadline := big.NewInt(time.Now().Add(20 * time.Minute).Unix())
+
+	// Slippage protection via amount0Min/amount1Min
+	// These minimums protect against price manipulation and sandwich attacks
+	// For now use zero minimums (production should calculate based on slippage percentage)
+	// TODO: Calculate proper minimums: amount0Min = expectedAmount0 * (100 - slippagePct) / 100
+	amount0Min := big.NewInt(0)
+	amount1Min := big.NewInt(0)
+
+	// T012-T013: Encode decreaseLiquidity
+	decreaseParams := &DecreaseLiquidityParams{
+		TokenId:    nftTokenID,
+		Liquidity:  liquidity,
+		Amount0Min: amount0Min,
+		Amount1Min: amount1Min,
+		Deadline:   deadline,
+	}
+
+	nftManagerABI := nftManagerClient.Abi()
+	decreaseData, err := nftManagerABI.Pack("decreaseLiquidity", decreaseParams)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to encode decreaseLiquidity: %v", err),
+		}, fmt.Errorf("failed to encode decreaseLiquidity: %w", err)
+	}
+	multicallData = append(multicallData, decreaseData)
+
+	// T014-T015: Encode collect
+	maxUint128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	collectParams := &CollectParams{
+		TokenId:    nftTokenID,
+		Recipient:  b.myAddr,
+		Amount0Max: maxUint128,
+		Amount1Max: maxUint128,
+	}
+
+	collectData, err := nftManagerABI.Pack("collect", collectParams)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to encode collect: %v", err),
+		}, fmt.Errorf("failed to encode collect: %w", err)
+	}
+	multicallData = append(multicallData, collectData)
+
+	// T016: Encode burn
+	burnData, err := nftManagerABI.Pack("burn", nftTokenID)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to encode burn: %v", err),
+		}, fmt.Errorf("failed to encode burn: %w", err)
+	}
+	multicallData = append(multicallData, burnData)
+
+	// T017: Execute multicall transaction
+	txHash, err := nftManagerClient.Send(
+		types.Standard,
+		nil, // Use automatic gas limit estimation
+		&b.myAddr,
+		b.privateKey,
+		"multicall",
+		multicallData,
+	)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to submit multicall transaction: %v", err),
+		}, fmt.Errorf("failed to submit multicall transaction: %w", err)
+	}
+
+	// T018: Wait for transaction confirmation
+	receipt, err := b.tl.WaitForTransaction(txHash)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("multicall transaction failed: %v", err),
+		}, fmt.Errorf("multicall transaction failed: %w", err)
+	}
+
+	// T019: Extract gas cost from receipt
+	gasCost, err := util.ExtractGasCost(receipt)
+	if err != nil {
+		return &WithdrawResult{
+			NFTTokenID:   nftTokenID,
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
+		}, fmt.Errorf("failed to extract gas cost: %w", err)
+	}
+
+	gasPrice := new(big.Int)
+	gasPrice.SetString(receipt.EffectiveGasPrice, 0)
+	gasUsed := new(big.Int)
+	gasUsed.SetString(receipt.GasUsed, 0)
+
+	// T020: Create TransactionRecord
+	var transactions []TransactionRecord
+	transactions = append(transactions, TransactionRecord{
+		TxHash:    txHash,
+		GasUsed:   gasUsed.Uint64(),
+		GasPrice:  gasPrice,
+		GasCost:   gasCost,
+		Timestamp: time.Now(),
+		Operation: "Withdraw",
+	})
+
+	// T021: Build and return WithdrawResult
+	result := &WithdrawResult{
+		NFTTokenID:   nftTokenID,
+		Amount0:      big.NewInt(0), // Will be enhanced in Polish phase to parse from multicall results
+		Amount1:      big.NewInt(0), // Will be enhanced in Polish phase to parse from multicall results
+		Transactions: transactions,
+		TotalGasCost: gasCost,
+		Success:      true,
+		ErrorMessage: "",
+	}
+
+	// T022: Add success logging
+	fmt.Printf("✓ Liquidity withdrawn successfully\n")
+	fmt.Printf("  NFT ID: %s\n", nftTokenID.String())
+	fmt.Printf("  Gas cost: %s wei\n", gasCost.String())
 
 	return result, nil
 }
