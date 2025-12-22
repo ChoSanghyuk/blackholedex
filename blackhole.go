@@ -2,6 +2,7 @@ package blackholedex
 
 import (
 	"blackholego/internal/util"
+	"blackholego/pkg/contractclient"
 	"blackholego/pkg/types"
 	"crypto/ecdsa"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 const (
@@ -35,6 +38,46 @@ type Blackhole struct {
 	myAddr     common.Address
 	tl         TxListener
 	ccm        map[string]ContractClient // ContractClientMap
+}
+
+type ContractClientConfig struct {
+	address string
+	abipath string
+}
+
+func NewBlackhole(pk string, tl TxListener, rpcURL string, configs []ContractClientConfig) (*Blackhole, error) {
+
+	privateKey, err := crypto.HexToECDSA(pk)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to parse private key: %v", err)
+	}
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("error casting public key to ECDSA")
+	}
+	address := crypto.PubkeyToAddress(*publicKeyECDSA)
+
+	client, err := ethclient.Dial(rpcURL)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to connect to RPC: %v", err)
+	}
+	ccm := make(map[string]ContractClient)
+	for _, c := range configs {
+		ABI, err := util.LoadABI(c.abipath)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to load ABI: %v", err)
+		}
+		cc := contractclient.NewContractClient(client, common.HexToAddress(c.address), ABI)
+		ccm[c.address] = cc
+	}
+
+	return &Blackhole{
+		privateKey: privateKey,
+		myAddr:     address,
+		tl:         tl,
+		ccm:        ccm,
+	}, nil
 }
 
 func (b Blackhole) Client(address string) (ContractClient, error) {

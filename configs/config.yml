@@ -1,0 +1,26 @@
+
+rpc:
+  https://api.avax.network/ext/bc/C/rpc
+
+contract_client:
+  routerv2:
+      address: 0x04E1dee021Cd12bBa022A72806441B43d8212Fec
+      abi: blackholedex-contracts/abi/RouterV2.json
+  usdc:
+    address: 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
+    abi: blackholedex-contracts/abi/ERC20.json
+  wavax:
+    address: 0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7
+    abi: blackholedex-contracts/abi/ERC20.json
+  wavaxUsdcPair:
+    address: 0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0
+    abi: blackholedex-contracts/abi/IAlgebraPoolState.json
+  nonfungiblePositionManager:
+    address: 0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146
+    abi: blackholedex-contracts/abi/MultiCallNonfungiblePositionManager.json
+  gauge:
+    address: 0x3ADE52f9779c07471F4B6d5997444C3c2124C1c0
+    abi: blackholedex-contracts/abi/GaugeV2.json
+  farmingCenter:
+    address: 0xa47Ad2C95FaE476a73b85A355A5855aDb4b3A449
+    abi: blackholedex-contracts/abi/IFarmingCenter.json
