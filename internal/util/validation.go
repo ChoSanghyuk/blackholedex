@@ -4,6 +4,7 @@ import (
 	"blackholego/pkg/types"
 	"fmt"
 	"math/big"
+	"strings"
 )
 
 // Validation and helper functions for liquidity staking operations
@@ -112,4 +113,37 @@ func ExtractGasCost(receipt *types.TxReceipt) (*big.Int, error) {
 	gasCost := new(big.Int).Mul(gasUsed, gasPrice)
 
 	return gasCost, nil
+}
+
+// IsCriticalError determines if an error is critical and requires immediate halt (T015)
+// Critical errors require immediate strategy halt, non-critical errors use threshold-based logic
+// Implements error classification from research.md R6
+func IsCriticalError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Critical error patterns that require immediate halt
+	criticalPatterns := []string{
+		"insufficient balance",
+		"insufficient funds",
+		"nft not owned",
+		"not owner",
+		"transaction reverted",
+		"execution reverted",
+		"invalid position state",
+		"position does not exist",
+		"unauthorized",
+		"contract paused",
+	}
+
+	for _, pattern := range criticalPatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+
+	return false
 }

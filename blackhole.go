@@ -4,6 +4,7 @@ import (
 	"blackholego/internal/util"
 	"blackholego/pkg/contractclient"
 	"blackholego/pkg/types"
+	"context"
 	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
@@ -1258,3 +1259,998 @@ func MintNftTokenId(nftManagerClient ContractClient, mintReceipt *types.TxReceip
 
 	return nftTokenID
 }
+
+// Strategy helper functions
+
+// sendReport sends a StrategyReport to the reporting channel with non-blocking behavior (T016)
+// If the channel is full, the message is dropped to prevent strategy deadlock
+// Implements non-blocking send pattern from research.md R5
+func sendReport(reportChan chan<- string, report StrategyReport) {
+	if reportChan == nil {
+		return // No channel provided, skip reporting
+	}
+
+	jsonStr, err := report.ToJSON()
+	if err != nil {
+		log.Printf("Failed to marshal strategy report: %v", err)
+		return
+	}
+
+	// Non-blocking send
+	select {
+	case reportChan <- jsonStr:
+		// Sent successfully
+	default:
+		// Channel full, drop message to prevent blocking
+		log.Printf("Strategy report channel full, dropping message: %s", report.EventType)
+	}
+}
+
+// User Story 1: Initial Position Entry functions (T018-T024)
+
+// validateInitialBalances checks if sufficient WAVAX and USDC are available (T018)
+// Returns error if wallet balances are insufficient for strategy execution
+func (b *Blackhole) validateInitialBalances(config *StrategyConfig) error {
+	// Get WAVAX balance
+	wavaxClient, err := b.Client(wavax)
+	if err != nil {
+		return fmt.Errorf("failed to get WAVAX client: %w", err)
+	}
+
+	wavaxBalanceRaw, err := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	if err != nil {
+		return fmt.Errorf("failed to get WAVAX balance: %w", err)
+	}
+	wavaxBalance := wavaxBalanceRaw[0].(*big.Int)
+
+	// Get USDC balance
+	usdcClient, err := b.Client(usdc)
+	if err != nil {
+		return fmt.Errorf("failed to get USDC client: %w", err)
+	}
+
+	usdcBalanceRaw, err := usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	if err != nil {
+		return fmt.Errorf("failed to get USDC balance: %w", err)
+	}
+	usdcBalance := usdcBalanceRaw[0].(*big.Int)
+
+	// Check if wallet has sufficient WAVAX
+	if wavaxBalance.Cmp(config.MaxWAVAX) < 0 {
+		return fmt.Errorf("insufficient WAVAX balance: have %s, need %s", wavaxBalance.String(), config.MaxWAVAX.String())
+	}
+
+	// Check if wallet has sufficient USDC
+	if usdcBalance.Cmp(config.MaxUSDC) < 0 {
+		return fmt.Errorf("insufficient USDC balance: have %s, need %s", usdcBalance.String(), config.MaxUSDC.String())
+	}
+
+	return nil
+}
+
+// initialPositionEntry orchestrates the creation of the initial balanced liquidity position (T019-T024)
+// Steps: validate balances → calculate rebalance → swap if needed → mint → stake
+// Returns: StakingResult with NFT ID and position details, or error
+func (b *Blackhole) initialPositionEntry(
+	config *StrategyConfig,
+	state *StrategyState,
+	reportChan chan<- string,
+) (*StakingResult, error) {
+	// T018: Validate balances
+	if err := b.validateInitialBalances(config); err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Initial balance validation failed",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return nil, fmt.Errorf("balance validation failed: %w", err)
+	}
+
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "strategy_start",
+		Message:   "Starting initial position entry",
+		Phase:     &state.CurrentState,
+	})
+
+	// Get current balances
+	wavaxClient, _ := b.Client(wavax)
+	wavaxBalanceRaw, _ := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	wavaxBalance := wavaxBalanceRaw[0].(*big.Int)
+
+	usdcClient, _ := b.Client(usdc)
+	usdcBalanceRaw, _ := usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	usdcBalance := usdcBalanceRaw[0].(*big.Int)
+
+	// Get current pool state for price
+	poolState, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Failed to get pool state",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return nil, fmt.Errorf("failed to get pool state: %w", err)
+	}
+
+	// T017, T020: Calculate rebalance amounts
+	tokenToSwap, swapAmount, err := util.CalculateRebalanceAmounts(
+		wavaxBalance,
+		usdcBalance,
+		poolState.SqrtPrice,
+	)
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Failed to calculate rebalance amounts",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return nil, fmt.Errorf("failed to calculate rebalance: %w", err)
+	}
+
+	// T020: Perform swap if needed (non-zero swap amount)
+	var swapGasCost *big.Int = big.NewInt(0)
+	if swapAmount.Sign() > 0 {
+		var fromToken, toToken common.Address
+		if tokenToSwap == 0 {
+			// Swap WAVAX to USDC
+			fromToken = common.HexToAddress(wavax)
+			toToken = common.HexToAddress(usdc)
+		} else {
+			// Swap USDC to WAVAX
+			fromToken = common.HexToAddress(usdc)
+			toToken = common.HexToAddress(wavax)
+		}
+
+		// Build swap route
+		route := Route{
+			Pair:         common.HexToAddress(wavaxUsdcPair),
+			From:         fromToken,
+			To:           toToken,
+			Stable:       false,
+			Concentrated: true,
+			Receiver:     b.myAddr,
+		}
+
+		// Calculate minimum output with slippage
+		minAmountOut := util.CalculateMinAmount(swapAmount, config.SlippagePct)
+
+		swapParams := &SWAPExactTokensForTokensParams{
+			AmountIn:     swapAmount,
+			AmountOutMin: minAmountOut,
+			Routes:       []Route{route},
+			To:           b.myAddr,
+			Deadline:     big.NewInt(time.Now().Add(20 * time.Minute).Unix()),
+		}
+
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "swap_complete",
+			Message:   fmt.Sprintf("Rebalancing: swapping token %d amount %s", tokenToSwap, swapAmount.String()),
+			Phase:     &state.CurrentState,
+		})
+
+		swapTxHash, err := b.Swap(swapParams)
+		if err != nil {
+			sendReport(reportChan, StrategyReport{
+				Timestamp: time.Now(),
+				EventType: "error",
+				Message:   "Swap failed during rebalancing",
+				Error:     err.Error(),
+				Phase:     &state.CurrentState,
+			})
+			return nil, fmt.Errorf("swap failed: %w", err)
+		}
+
+		// Wait for swap transaction and get gas cost
+		swapReceipt, err := b.tl.WaitForTransaction(swapTxHash)
+		if err != nil {
+			return nil, fmt.Errorf("swap transaction failed: %w", err)
+		}
+		swapGasCost, _ = util.ExtractGasCost(swapReceipt)
+
+		state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, swapGasCost)
+		sendReport(reportChan, StrategyReport{
+			Timestamp:     time.Now(),
+			EventType:     "gas_cost",
+			Message:       "Swap transaction completed",
+			GasCost:       swapGasCost,
+			CumulativeGas: state.CumulativeGas,
+			Phase:         &state.CurrentState,
+		})
+
+		// Update balances after swap
+		wavaxBalanceRaw, _ = wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+		wavaxBalance = wavaxBalanceRaw[0].(*big.Int)
+
+		usdcBalanceRaw, _ = usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+		usdcBalance = usdcBalanceRaw[0].(*big.Int)
+	}
+
+	// T021: Mint position with RangeWidth from config
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "position_created",
+		Message:   fmt.Sprintf("Minting position with RangeWidth %d", config.RangeWidth),
+		Phase:     &state.CurrentState,
+	})
+
+	mintResult, err := b.Mint(wavaxBalance, usdcBalance, config.RangeWidth, config.SlippagePct)
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Mint failed",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return nil, fmt.Errorf("mint failed: %w", err)
+	}
+
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, mintResult.TotalGasCost)
+	sendReport(reportChan, StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Mint transaction completed",
+		GasCost:       mintResult.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Phase:         &state.CurrentState,
+	})
+
+	// T022: Stake the minted NFT
+	stakeResult, err := b.Stake(mintResult.NFTTokenID)
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Stake failed",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return nil, fmt.Errorf("stake failed: %w", err)
+	}
+
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, stakeResult.TotalGasCost)
+	sendReport(reportChan, StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Stake transaction completed",
+		GasCost:       stakeResult.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Phase:         &state.CurrentState,
+	})
+
+	// T024: Update StrategyState
+	state.NFTTokenID = mintResult.NFTTokenID
+	state.TickLower = mintResult.FinalTickLower
+	state.TickUpper = mintResult.FinalTickUpper
+	state.PositionCreatedAt = time.Now()
+
+	// Create position snapshot
+	positionSnapshot := &PositionSnapshot{
+		NFTTokenID: mintResult.NFTTokenID,
+		TickLower:  mintResult.FinalTickLower,
+		TickUpper:  mintResult.FinalTickUpper,
+		Liquidity:  big.NewInt(0), // Will be populated in future enhancements
+		Amount0:    mintResult.ActualAmount0,
+		Amount1:    mintResult.ActualAmount1,
+		FeeGrowth0: big.NewInt(0),
+		FeeGrowth1: big.NewInt(0),
+		Timestamp:  time.Now(),
+	}
+
+	sendReport(reportChan, StrategyReport{
+		Timestamp:       time.Now(),
+		EventType:       "position_created",
+		Message:         "Initial position entry completed successfully",
+		Phase:           &state.CurrentState,
+		NFTTokenID:      mintResult.NFTTokenID,
+		PositionDetails: positionSnapshot,
+		CumulativeGas:   state.CumulativeGas,
+	})
+
+	return mintResult, nil
+}
+
+// User Story 3: Automated Position Rebalancing functions (T025-T034)
+
+// executeUnstake calls the existing Unstake method with correct nonce (T025)
+func (b *Blackhole) executeUnstake(
+	nftTokenID *big.Int,
+	nonce *big.Int,
+	state *StrategyState,
+	reportChan chan<- string,
+) (*UnstakeResult, error) {
+	sendReport(reportChan, StrategyReport{
+		Timestamp:  time.Now(),
+		EventType:  "rebalance_start",
+		Message:    fmt.Sprintf("Unstaking NFT %s", nftTokenID.String()),
+		Phase:      &state.CurrentState,
+		NFTTokenID: nftTokenID,
+	})
+
+	result, err := b.Unstake(nftTokenID, nonce)
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp:  time.Now(),
+			EventType:  "error",
+			Message:    "Unstake failed",
+			Error:      err.Error(),
+			Phase:      &state.CurrentState,
+			NFTTokenID: nftTokenID,
+		})
+		return nil, fmt.Errorf("unstake failed: %w", err)
+	}
+
+	// Update cumulative gas
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, result.TotalGasCost)
+	sendReport(reportChan, StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Unstake transaction completed",
+		GasCost:       result.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Phase:         &state.CurrentState,
+	})
+
+	// Update cumulative rewards if collected
+	if result.Rewards != nil {
+		state.CumulativeRewards = new(big.Int).Add(state.CumulativeRewards, result.Rewards.Reward)
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "profit",
+			Message:   fmt.Sprintf("Rewards collected: %s", result.Rewards.Reward.String()),
+			Profit:    result.Rewards.Reward,
+			Phase:     &state.CurrentState,
+		})
+	}
+
+	return result, nil
+}
+
+// executeWithdraw calls the existing Withdraw method and tracks results (T026)
+func (b *Blackhole) executeWithdraw(
+	nftTokenID *big.Int,
+	state *StrategyState,
+	reportChan chan<- string,
+) (*WithdrawResult, error) {
+	sendReport(reportChan, StrategyReport{
+		Timestamp:  time.Now(),
+		EventType:  "rebalance_start",
+		Message:    fmt.Sprintf("Withdrawing liquidity from NFT %s", nftTokenID.String()),
+		Phase:      &state.CurrentState,
+		NFTTokenID: nftTokenID,
+	})
+
+	result, err := b.Withdraw(nftTokenID)
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp:  time.Now(),
+			EventType:  "error",
+			Message:    "Withdraw failed",
+			Error:      err.Error(),
+			Phase:      &state.CurrentState,
+			NFTTokenID: nftTokenID,
+		})
+		return nil, fmt.Errorf("withdraw failed: %w", err)
+	}
+
+	// Update cumulative gas
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, result.TotalGasCost)
+	sendReport(reportChan, StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Withdraw transaction completed",
+		GasCost:       result.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Phase:         &state.CurrentState,
+	})
+
+	return result, nil
+}
+
+// executeRebalancing orchestrates the full rebalancing workflow (T027-T034)
+// Steps: unstake → withdraw → calculate rebalance → swap → update state
+// Does NOT create new position - that happens after stability check
+func (b *Blackhole) executeRebalancing(
+	config *StrategyConfig,
+	state *StrategyState,
+	nonce *big.Int,
+	reportChan chan<- string,
+) (*RebalanceWorkflow, error) {
+	// T028: Create RebalanceWorkflow for tracking
+	workflow := &RebalanceWorkflow{
+		StartTime:    time.Now(),
+		OldPosition:  nil, // Will be populated if we query position details
+		SwapResults:  []TransactionRecord{},
+		TotalGas:     big.NewInt(0),
+		Success:      false,
+		ErrorMessage: "",
+	}
+
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "rebalance_start",
+		Message:   "Starting rebalancing workflow",
+		Phase:     &state.CurrentState,
+	})
+
+	// T025: Execute unstake
+	unstakeResult, err := b.executeUnstake(state.NFTTokenID, nonce, state, reportChan)
+	if err != nil {
+		workflow.Success = false
+		workflow.ErrorMessage = err.Error()
+		return workflow, err
+	}
+
+	// T030: Track cumulative gas
+	workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, unstakeResult.TotalGasCost)
+
+	// T031: Track cumulative rewards
+	if unstakeResult.Rewards != nil {
+		state.CumulativeRewards = new(big.Int).Add(state.CumulativeRewards, unstakeResult.Rewards.Reward)
+	}
+
+	// T026: Execute withdraw
+	withdrawResult, err := b.executeWithdraw(state.NFTTokenID, state, reportChan)
+	if err != nil {
+		workflow.Success = false
+		workflow.ErrorMessage = err.Error()
+		return workflow, err
+	}
+
+	workflow.WithdrawResult = withdrawResult
+	// T030: Track cumulative gas
+	workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, withdrawResult.TotalGasCost)
+
+	// Get current balances after withdrawal
+	wavaxClient, _ := b.Client(wavax)
+	wavaxBalanceRaw, _ := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	wavaxBalance := wavaxBalanceRaw[0].(*big.Int)
+
+	usdcClient, _ := b.Client(usdc)
+	usdcBalanceRaw, _ := usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
+	usdcBalance := usdcBalanceRaw[0].(*big.Int)
+
+	// Get current pool price
+	poolState, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+	if err != nil {
+		workflow.Success = false
+		workflow.ErrorMessage = fmt.Sprintf("failed to get pool state: %v", err)
+		return workflow, fmt.Errorf("failed to get pool state: %w", err)
+	}
+
+	// T029: Calculate rebalance amounts
+	tokenToSwap, swapAmount, err := util.CalculateRebalanceAmounts(
+		wavaxBalance,
+		usdcBalance,
+		poolState.SqrtPrice,
+	)
+	if err != nil {
+		workflow.Success = false
+		workflow.ErrorMessage = fmt.Sprintf("failed to calculate rebalance: %v", err)
+		return workflow, fmt.Errorf("failed to calculate rebalance: %w", err)
+	}
+
+	// Perform swap if needed
+	if swapAmount.Sign() > 0 {
+		var fromToken, toToken common.Address
+		if tokenToSwap == 0 {
+			fromToken = common.HexToAddress(wavax)
+			toToken = common.HexToAddress(usdc)
+		} else {
+			fromToken = common.HexToAddress(usdc)
+			toToken = common.HexToAddress(wavax)
+		}
+
+		route := Route{
+			Pair:         common.HexToAddress(wavaxUsdcPair),
+			From:         fromToken,
+			To:           toToken,
+			Stable:       false,
+			Concentrated: true,
+			Receiver:     b.myAddr,
+		}
+
+		minAmountOut := util.CalculateMinAmount(swapAmount, config.SlippagePct)
+
+		swapParams := &SWAPExactTokensForTokensParams{
+			AmountIn:     swapAmount,
+			AmountOutMin: minAmountOut,
+			Routes:       []Route{route},
+			To:           b.myAddr,
+			Deadline:     big.NewInt(time.Now().Add(20 * time.Minute).Unix()),
+		}
+
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "swap_complete",
+			Message:   fmt.Sprintf("Rebalancing: swapping token %d amount %s", tokenToSwap, swapAmount.String()),
+			Phase:     &state.CurrentState,
+		})
+
+		swapTxHash, err := b.Swap(swapParams)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = fmt.Sprintf("swap failed: %v", err)
+			sendReport(reportChan, StrategyReport{
+				Timestamp: time.Now(),
+				EventType: "error",
+				Message:   "Swap failed during rebalancing",
+				Error:     err.Error(),
+				Phase:     &state.CurrentState,
+			})
+			return workflow, fmt.Errorf("swap failed: %w", err)
+		}
+
+		swapReceipt, err := b.tl.WaitForTransaction(swapTxHash)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = fmt.Sprintf("swap transaction failed: %v", err)
+			return workflow, fmt.Errorf("swap transaction failed: %w", err)
+		}
+
+		swapGasCost, _ := util.ExtractGasCost(swapReceipt)
+		// T030: Track cumulative gas
+		workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, swapGasCost)
+		state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, swapGasCost)
+
+		// T032: Track swap fees (estimate as percentage of swap amount)
+		swapFee := new(big.Int).Div(swapAmount, big.NewInt(1000)) // 0.1% fee estimate
+		state.TotalSwapFees = new(big.Int).Add(state.TotalSwapFees, swapFee)
+
+		sendReport(reportChan, StrategyReport{
+			Timestamp:     time.Now(),
+			EventType:     "gas_cost",
+			Message:       "Swap transaction completed",
+			GasCost:       swapGasCost,
+			CumulativeGas: state.CumulativeGas,
+			Phase:         &state.CurrentState,
+		})
+	}
+
+	// T032, T033: Calculate and report net P&L
+	netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+	netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+
+	sendReport(reportChan, StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "profit",
+		Message:       "Rebalancing workflow completed (withdrawal + swap)",
+		CumulativeGas: state.CumulativeGas,
+		Profit:        state.CumulativeRewards,
+		NetPnL:        netPnL,
+		Phase:         &state.CurrentState,
+	})
+
+	workflow.Duration = time.Since(workflow.StartTime)
+	workflow.Success = true
+
+	return workflow, nil
+}
+
+// User Story 2: Continuous Price Monitoring functions (T035-T041)
+
+// monitoringLoop continuously monitors pool price and detects out-of-range conditions (T035-T041)
+// Returns true if out-of-range detected, false otherwise, or error
+func (b *Blackhole) monitoringLoop(
+	ctx context.Context,
+	config *StrategyConfig,
+	state *StrategyState,
+	reportChan chan<- string,
+) (bool, error) {
+	// T034: Check context cancellation
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+
+	// T036: Get current pool state
+	poolState, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Failed to get pool state during monitoring",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return false, fmt.Errorf("failed to get pool state: %w", err)
+	}
+
+	// Update last observed price
+	state.LastPrice = poolState.SqrtPrice
+
+	// T037: Check if position is out of range
+	positionRange := &PositionRange{
+		TickLower: state.TickLower,
+		TickUpper: state.TickUpper,
+	}
+
+	isOutOfRange := positionRange.IsOutOfRange(poolState.Tick)
+
+	// T039: Send monitoring report
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "monitoring",
+		Message:   fmt.Sprintf("Price check: tick=%d, range=[%d, %d], out_of_range=%v", poolState.Tick, state.TickLower, state.TickUpper, isOutOfRange),
+		Phase:     &state.CurrentState,
+	})
+
+	// T038: Transition to RebalancingRequired if out of range
+	if isOutOfRange {
+		state.CurrentState = RebalancingRequired
+		sendReport(reportChan, StrategyReport{
+			Timestamp:  time.Now(),
+			EventType:  "out_of_range",
+			Message:    fmt.Sprintf("Position out of range detected: current tick %d outside [%d, %d]", poolState.Tick, state.TickLower, state.TickUpper),
+			Phase:      &state.CurrentState,
+			NFTTokenID: state.NFTTokenID,
+		})
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// User Story 4: Price Stability Detection functions (T042-T049)
+
+// stabilityLoop waits for price stabilization before re-entering position (T042-T049)
+// Returns true if stable, false otherwise, or error
+func (b *Blackhole) stabilityLoop(
+	ctx context.Context,
+	config *StrategyConfig,
+	state *StrategyState,
+	stabilityWindow *StabilityWindow,
+	reportChan chan<- string,
+) (bool, error) {
+	// T048: Check context cancellation
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+
+	// T043: Get current pool price
+	poolState, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+	if err != nil {
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Failed to get pool state during stability check",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+		return false, fmt.Errorf("failed to get pool state: %w", err)
+	}
+
+	// T044: Check stability using StabilityWindow
+	isStable := stabilityWindow.CheckStability(poolState.SqrtPrice)
+
+	// T047: Send stability check report with progress
+	progress := stabilityWindow.Progress()
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "stability_check",
+		Message:   fmt.Sprintf("Stability check: progress=%.1f%% (%d/%d intervals)", progress*100, stabilityWindow.StableCount, stabilityWindow.RequiredIntervals),
+		Phase:     &state.CurrentState,
+	})
+
+	// T045: Transition to ExecutingRebalancing if stable
+	if isStable {
+		state.CurrentState = ExecutingRebalancing
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "stability_check",
+			Message:   "Price stabilized, ready to re-enter position",
+			Phase:     &state.CurrentState,
+		})
+		return true, nil
+	}
+
+	// T046: Reset stability window if price becomes volatile
+	// Note: CheckStability already handles this internally
+
+	return false, nil
+}
+
+// Phase 7: Main Strategy Integration (T050-T070)
+
+// RunStrategy1 executes the automated liquidity repositioning strategy
+// This is the main entry point that orchestrates all user stories:
+// - US1: Initial position entry with automatic rebalancing
+// - US2: Continuous price monitoring
+// - US3: Automated position rebalancing when out-of-range
+// - US4: Price stability detection before re-entry
+func (b *Blackhole) RunStrategy1(
+	ctx context.Context,
+	reportChan chan<- string,
+	config *StrategyConfig,
+) error {
+	// T051: Validate configuration at start
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid strategy configuration: %w", err)
+	}
+
+	// T052: Initialize StrategyState
+	state := &StrategyState{
+		CurrentState:      Initializing,
+		NFTTokenID:        nil,
+		TickLower:         0,
+		TickUpper:         0,
+		LastPrice:         nil,
+		StableCount:       0,
+		CumulativeGas:     big.NewInt(0),
+		CumulativeRewards: big.NewInt(0),
+		TotalSwapFees:     big.NewInt(0),
+		ErrorCount:        0,
+		LastErrorTime:     time.Time{},
+		StartTime:         time.Now(),
+		PositionCreatedAt: time.Time{},
+	}
+
+	// T053: Initialize CircuitBreaker
+	circuitBreaker := &CircuitBreaker{
+		ErrorWindow:           config.CircuitBreakerWindow,
+		ErrorThreshold:        config.CircuitBreakerThreshold,
+		LastErrors:            []time.Time{},
+		CriticalErrorOccurred: false,
+	}
+
+	// T054: Initialize StabilityWindow
+	stabilityWindow := &StabilityWindow{
+		Threshold:         config.StabilityThreshold,
+		RequiredIntervals: config.StabilityIntervals,
+		LastPrice:         nil,
+		StableCount:       0,
+	}
+
+	// T055: Send strategy_start report
+	sendReport(reportChan, StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "strategy_start",
+		Message:   "RunStrategy1 starting - automated liquidity repositioning",
+		Phase:     &state.CurrentState,
+	})
+
+	// T056, T057: Create initial position and transition to ActiveMonitoring
+	mintResult, err := b.initialPositionEntry(config, state, reportChan)
+	if err != nil {
+		// T064, T065: Handle error with circuit breaker
+		critical := util.IsCriticalError(err)
+		shouldHalt := circuitBreaker.RecordError(err, critical)
+
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "error",
+			Message:   "Initial position entry failed",
+			Error:     err.Error(),
+			Phase:     &state.CurrentState,
+		})
+
+		if shouldHalt {
+			// T066: Send halt report
+			netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+			netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+			sendReport(reportChan, StrategyReport{
+				Timestamp: time.Now(),
+				EventType: "halt",
+				Message:   "Strategy halted due to circuit breaker trigger during initialization",
+				Error:     err.Error(),
+				NetPnL:    netPnL,
+				Phase:     &state.CurrentState,
+			})
+			return fmt.Errorf("strategy halted: %w", err)
+		}
+		return err
+	}
+
+	// Initial position created successfully
+	state.CurrentState = ActiveMonitoring
+	log.Printf("Initial position created: NFT ID %s", mintResult.NFTTokenID.String())
+
+	// T058: Implement main loop with ticker
+	ticker := time.NewTicker(config.MonitoringInterval)
+	defer ticker.Stop()
+
+	// Nonce for unstaking (should be queried from contract in production)
+	nonce := big.NewInt(0) // Default nonce for the incentive program
+
+	// T058-T070: Main strategy loop
+	for {
+		select {
+		case <-ctx.Done():
+			// T067: Graceful shutdown
+			state.CurrentState = Halted
+			netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+			netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+			sendReport(reportChan, StrategyReport{
+				Timestamp:     time.Now(),
+				EventType:     "shutdown",
+				Message:       "Strategy shutdown requested",
+				Phase:         &state.CurrentState,
+				CumulativeGas: state.CumulativeGas,
+				Profit:        state.CumulativeRewards,
+				NetPnL:        netPnL,
+			})
+			return ctx.Err()
+
+		case <-ticker.C:
+			// Handle different phases
+			switch state.CurrentState {
+			case ActiveMonitoring:
+				// T059: Monitor pool price
+				outOfRange, err := b.monitoringLoop(ctx, config, state, reportChan)
+				if err != nil {
+					// T064, T065: Error handling
+					critical := util.IsCriticalError(err)
+					shouldHalt := circuitBreaker.RecordError(err, critical)
+
+					sendReport(reportChan, StrategyReport{
+						Timestamp: time.Now(),
+						EventType: "error",
+						Message:   "Monitoring loop error",
+						Error:     err.Error(),
+						Phase:     &state.CurrentState,
+					})
+
+					if shouldHalt {
+						state.CurrentState = Halted
+						netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+						netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+						sendReport(reportChan, StrategyReport{
+							Timestamp: time.Now(),
+							EventType: "halt",
+							Message:   "Strategy halted due to circuit breaker",
+							Error:     err.Error(),
+							NetPnL:    netPnL,
+							Phase:     &state.CurrentState,
+						})
+						return fmt.Errorf("strategy halted: %w", err)
+					}
+					continue
+				}
+
+				// T038: Phase already transitioned to RebalancingRequired if out of range
+				if outOfRange {
+					log.Printf("Position out of range, transitioning to rebalancing")
+				}
+
+			case RebalancingRequired:
+				// T060: Execute rebalancing workflow
+				_, err := b.executeRebalancing(config, state, nonce, reportChan)
+				if err != nil {
+					// T064, T065: Error handling
+					critical := util.IsCriticalError(err)
+					shouldHalt := circuitBreaker.RecordError(err, critical)
+
+					sendReport(reportChan, StrategyReport{
+						Timestamp: time.Now(),
+						EventType: "error",
+						Message:   "Rebalancing failed",
+						Error:     err.Error(),
+						Phase:     &state.CurrentState,
+					})
+
+					if shouldHalt {
+						state.CurrentState = Halted
+						netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+						netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+						sendReport(reportChan, StrategyReport{
+							Timestamp: time.Now(),
+							EventType: "halt",
+							Message:   "Strategy halted due to circuit breaker",
+							Error:     err.Error(),
+							NetPnL:    netPnL,
+							Phase:     &state.CurrentState,
+						})
+						return fmt.Errorf("strategy halted: %w", err)
+					}
+					// Reset to ActiveMonitoring to retry
+					state.CurrentState = ActiveMonitoring
+					continue
+				}
+
+				// Rebalancing successful, transition to WaitingForStability
+				state.CurrentState = WaitingForStability
+				stabilityWindow.Reset() // Start fresh stability tracking
+				log.Printf("Rebalancing completed, waiting for price stability")
+
+			case WaitingForStability:
+				// T061: Wait for price stability
+				isStable, err := b.stabilityLoop(ctx, config, state, stabilityWindow, reportChan)
+				if err != nil {
+					// T064, T065: Error handling
+					critical := util.IsCriticalError(err)
+					shouldHalt := circuitBreaker.RecordError(err, critical)
+
+					sendReport(reportChan, StrategyReport{
+						Timestamp: time.Now(),
+						EventType: "error",
+						Message:   "Stability check error",
+						Error:     err.Error(),
+						Phase:     &state.CurrentState,
+					})
+
+					if shouldHalt {
+						state.CurrentState = Halted
+						netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+						netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+						sendReport(reportChan, StrategyReport{
+							Timestamp: time.Now(),
+							EventType: "halt",
+							Message:   "Strategy halted due to circuit breaker",
+							Error:     err.Error(),
+							NetPnL:    netPnL,
+							Phase:     &state.CurrentState,
+						})
+						return fmt.Errorf("strategy halted: %w", err)
+					}
+					continue
+				}
+
+				// T045: Phase already transitioned to ExecutingRebalancing if stable
+				if isStable {
+					log.Printf("Price stabilized, ready to re-enter position")
+				}
+
+			case ExecutingRebalancing:
+				// T062: Re-enter position after stability confirmed
+				mintResult, err := b.initialPositionEntry(config, state, reportChan)
+				if err != nil {
+					// T064, T065: Error handling
+					critical := util.IsCriticalError(err)
+					shouldHalt := circuitBreaker.RecordError(err, critical)
+
+					sendReport(reportChan, StrategyReport{
+						Timestamp: time.Now(),
+						EventType: "error",
+						Message:   "Position re-entry failed",
+						Error:     err.Error(),
+						Phase:     &state.CurrentState,
+					})
+
+					if shouldHalt {
+						state.CurrentState = Halted
+						netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+						netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+						sendReport(reportChan, StrategyReport{
+							Timestamp: time.Now(),
+							EventType: "halt",
+							Message:   "Strategy halted due to circuit breaker",
+							Error:     err.Error(),
+							NetPnL:    netPnL,
+							Phase:     &state.CurrentState,
+						})
+						return fmt.Errorf("strategy halted: %w", err)
+					}
+					// Retry stability check
+					state.CurrentState = WaitingForStability
+					stabilityWindow.Reset()
+					continue
+				}
+
+				// T063: Transition back to ActiveMonitoring
+				state.CurrentState = ActiveMonitoring
+				log.Printf("Position re-entry successful: NFT ID %s", mintResult.NFTTokenID.String())
+
+				// T068: Update cumulative tracking (already done in initialPositionEntry)
+				// T069: Phase transition already done
+				// T070: Position state already persisted in initialPositionEntry
+
+			case Halted:
+				// Strategy is halted, should not continue
+				return fmt.Errorf("strategy is in Halted state")
+			}
+		}
+	}
+}
+
+// PHASE 7까지 수행
