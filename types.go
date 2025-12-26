@@ -287,7 +287,7 @@ const (
 	// WaitingForStability: Position withdrawn, waiting for price stabilization
 	WaitingForStability
 	// ExecutingRebalancing: Performing token rebalancing and creating new position
-	ExecutingRebalancing
+	// ExecutingRebalancing
 	// Halted: Strategy stopped due to error or shutdown signal
 	Halted
 )
@@ -316,10 +316,10 @@ type StrategyConfig struct {
 	RangeWidth int
 	// SlippagePct defines slippage tolerance percentage (default: 1%, range: 1-5%)
 	SlippagePct int
-	// MaxWAVAX specifies maximum WAVAX amount in wei to use for liquidity (required, must be > 0)
-	MaxWAVAX *big.Int
-	// MaxUSDC specifies maximum USDC amount in smallest unit to use for liquidity (required, must be > 0)
-	MaxUSDC *big.Int
+	// // MaxWAVAX specifies maximum WAVAX amount in wei to use for liquidity (required, must be > 0)
+	// MaxWAVAX *big.Int
+	// // MaxUSDC specifies maximum USDC amount in smallest unit to use for liquidity (required, must be > 0)
+	// MaxUSDC *big.Int
 	// CircuitBreakerWindow defines time window for error accumulation (default: 5 minutes)
 	CircuitBreakerWindow time.Duration
 	// CircuitBreakerThreshold defines max errors allowed in window before halting (default: 5, minimum: 3)
@@ -413,15 +413,15 @@ type RebalanceWorkflow struct {
 // User must still set MaxWAVAX and MaxUSDC based on their wallet balance
 func DefaultStrategyConfig() *StrategyConfig {
 	return &StrategyConfig{
-		MonitoringInterval:      60 * time.Second,  // Constitutional minimum
-		StabilityThreshold:      0.005,             // 0.5% price change
-		StabilityIntervals:      5,                 // 5 consecutive stable intervals
-		RangeWidth:              10,                // ±5 ticks from center
-		SlippagePct:             1,                 // 1% slippage tolerance
-		MaxWAVAX:                nil,               // Must be set by user
-		MaxUSDC:                 nil,               // Must be set by user
-		CircuitBreakerWindow:    5 * time.Minute,  // 5-minute error window
-		CircuitBreakerThreshold: 5,                 // 5 errors before halt
+		MonitoringInterval: 60 * time.Second, // Constitutional minimum
+		StabilityThreshold: 0.005,            // 0.5% price change
+		StabilityIntervals: 5,                // 5 consecutive stable intervals
+		RangeWidth:         10,               // ±5 ticks from center
+		SlippagePct:        5,                // 1% slippage tolerance
+		// MaxWAVAX:                nil,              // Must be set by user
+		// MaxUSDC:                 nil,              // Must be set by user
+		CircuitBreakerWindow:    5 * time.Minute, // 5-minute error window
+		CircuitBreakerThreshold: 5,               // 5 errors before halt
 	}
 }
 
@@ -453,15 +453,15 @@ func (sc *StrategyConfig) Validate() error {
 		return fmt.Errorf("SlippagePct must be in range (0, 5], got %d", sc.SlippagePct)
 	}
 
-	// MaxWAVAX must be > 0
-	if sc.MaxWAVAX == nil || sc.MaxWAVAX.Sign() <= 0 {
-		return errors.New("MaxWAVAX must be > 0 and not nil")
-	}
+	// // MaxWAVAX must be > 0
+	// if sc.MaxWAVAX == nil || sc.MaxWAVAX.Sign() <= 0 {
+	// 	return errors.New("MaxWAVAX must be > 0 and not nil")
+	// }
 
-	// MaxUSDC must be > 0
-	if sc.MaxUSDC == nil || sc.MaxUSDC.Sign() <= 0 {
-		return errors.New("MaxUSDC must be > 0 and not nil")
-	}
+	// // MaxUSDC must be > 0
+	// if sc.MaxUSDC == nil || sc.MaxUSDC.Sign() <= 0 {
+	// 	return errors.New("MaxUSDC must be > 0 and not nil")
+	// }
 
 	// CircuitBreakerWindow must be > 0
 	if sc.CircuitBreakerWindow <= 0 {

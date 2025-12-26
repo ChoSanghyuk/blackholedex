@@ -279,12 +279,15 @@ func (cm *ContractClient) ParseReceipt(receipt *contracttypes.TxReceipt) (string
 		eventInfo := contracttypes.EventInfo{}
 		events[i] = &eventInfo
 
+		if log.Address != cm.contractAddress {
+			continue // 내 컨트랙트에서 발생한 것 아니면 패쓰하기
+		}
 		eventInfo.Address = log.Address
 		eventInfo.Index = log.Index
 
 		var abiEvent *abi.Event
 		for _, event := range cm.abi.Events {
-			fmt.Printf("event.ID.Hex(): %s | log.Topics[0].Hex(): %s\n", event.ID.Hex(), log.Topics[0].Hex())
+			// fmt.Printf("event.ID.Hex(): %s | log.Topics[0].Hex(): %s\n", event.ID.Hex(), log.Topics[0].Hex())
 			if event.ID.Hex() == log.Topics[0].Hex() {
 				abiEvent = &event
 				break
@@ -307,7 +310,9 @@ func (cm *ContractClient) ParseReceipt(receipt *contracttypes.TxReceipt) (string
 		indexed := make([]abi.Argument, len(log.Topics)-1)
 		idx := 0
 		for _, input := range abiEvent.Inputs {
-			if input.Indexed {
+			// memo. 자기 자신의 receipt일 경우에는 idx < len(indexed) 필요 없음. log.Topics이 시그니처 + indexed params로 구성되기 때문.
+			// 다만, 컨트랙트 내부에서 다른 컨트랙트 호출되어서 찍히는 로그는 제대로 파싱을 못하기에 여기서 오류가 생김
+			if input.Indexed && idx < len(indexed) {
 				indexed[idx] = input
 				idx++
 			}

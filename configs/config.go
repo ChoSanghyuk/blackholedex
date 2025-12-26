@@ -1,6 +1,7 @@
 package configs
 
 import (
+	blackholedex "blackholego"
 	"fmt"
 	"os"
 
@@ -43,13 +44,13 @@ func LoadConfig(path string) (*Config, error) {
 
 // ToContractClientConfigs converts the Config struct into a slice of ContractClientConfig
 // This method returns the format expected by blackholedex.NewBlackhole()
-func (c *Config) ToContractClientConfigs() []ContractClientConfig {
-	var configs []ContractClientConfig
+func (c *Config) ToContractClientConfigs() []blackholedex.ContractClientConfig {
+	var configs []blackholedex.ContractClientConfig
 
 	for _, data := range c.ContractClient {
-		configs = append(configs, ContractClientConfig{
+		configs = append(configs, blackholedex.ContractClientConfig{
 			Address: data.Address,
-			ABIPath: data.ABI,
+			Abipath: data.ABI,
 		})
 	}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -15,7 +16,8 @@ import (
 
 func TestDecodeTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.mint.local")
+	env := "env/.env.INonfungiblePositionManager.local"
+	err := godotenv.Load(env)
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}
@@ -81,11 +83,24 @@ func TestDecodeTransaction(t *testing.T) {
 		t.Logf("Decoded transaction:\n%s", string(jsonData))
 	})
 
+	t.Run("parse_receipt", func(t *testing.T) {
+
+		receipt, err := cc.GetReceipt(common.HexToHash(txHash))
+		t.Logf("parsed receipt:\n%v", receipt)
+		parsed, err := cc.ParseReceipt(receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("parsed receipt:\n%s", parsed)
+	})
+
 }
 
 func TestCallTransaction(t *testing.T) {
 	// Load .env.test.local file
-	err := godotenv.Load("env/.env.INonfungiblePositionManager.local")
+	env := "env/.env.INonfungiblePositionManager.local"
+	err := godotenv.Load(env)
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}
@@ -156,13 +171,16 @@ func TestCallTransaction(t *testing.T) {
 
 	t.Run("INonfungiblePositionManager", func(t *testing.T) {
 		t.Run("tokenOfOwnerByIndex", func(t *testing.T) {
-
-			outputs, err := cc.Call(nil, "tokenOfOwnerByIndex", common.HexToAddress(callerAddr), big.NewInt(2))
+			if !strings.Contains(env, "INonfungiblePositionManager") {
+				t.Fatal("wrong env")
+			}
+			outputs, err := cc.Call(nil, "tokenOfOwnerByIndex", common.HexToAddress(callerAddr), big.NewInt(0))
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			t.Logf("tokenOfOwnerByIndex outputs:%v", outputs)
+			t.Logf("tokenOfOwnerByIndex outputs 0 index: %v", outputs[0].(*big.Int))
 			/*
 				0 - 1280668
 				1 - 1336530

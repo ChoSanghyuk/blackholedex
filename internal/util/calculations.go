@@ -10,7 +10,9 @@ import (
 // SqrtPriceToPrice converts sqrtPriceX96 to human-readable price (T014)
 // Formula: price = (sqrtPrice / 2^96)^2
 // For WAVAX/USDC pool (assuming token0=WAVAX, token1=USDC):
-//   priceUSDCperWAVAX = price * (10^(18-6)) // Adjust for decimals
+//
+//	priceUSDCperWAVAX = price * (10^(18-6)) // Adjust for decimals
+//
 // Used for stability detection and ratio calculations from research.md R1
 func SqrtPriceToPrice(sqrtPriceX96 *big.Int) *big.Float {
 	if sqrtPriceX96 == nil || sqrtPriceX96.Sign() == 0 {
@@ -26,6 +28,7 @@ func SqrtPriceToPrice(sqrtPriceX96 *big.Int) *big.Float {
 
 	// Square to get price
 	price := new(big.Float).Mul(sqrtPriceNormalized, sqrtPriceNormalized)
+	// decimalAdjustment := new(big.Float).SetInt64(1_000_000_000_000) // 10^12
 
 	return price
 }
@@ -47,19 +50,24 @@ func CalculateRebalanceAmounts(
 
 	// Adjust for decimals: WAVAX has 18 decimals, USDC has 6 decimals
 	// Price needs to be adjusted by 10^(18-6) = 10^12
-	decimalAdjustment := new(big.Float).SetInt64(1_000_000_000_000) // 10^12
-	priceUSDCperWAVAX := new(big.Float).Mul(price, decimalAdjustment)
+	// decimalAdjustment := new(big.Float).SetInt64(1_000_000_000_000) // 10^12 // !IMPORTANT. 필요없음. adjustment를 안 해야 정상 작동
+	// priceUSDCperWAVAX := new(big.Float).Mul(price, decimalAdjustment)
+	// fmt.Printf("priceUSDCperWAVAX: %v\n", priceUSDCperWAVAX)
 
 	// Calculate current values in USDC terms
 	wavaxBalanceFloat := new(big.Float).SetInt(wavaxBalance)
 	usdcBalanceFloat := new(big.Float).SetInt(usdcBalance)
 
-	wavaxValueInUSDC := new(big.Float).Mul(wavaxBalanceFloat, priceUSDCperWAVAX)
+	wavaxValueInUSDC := new(big.Float).Mul(wavaxBalanceFloat, price)
 	totalValue := new(big.Float).Add(wavaxValueInUSDC, usdcBalanceFloat)
+	fmt.Printf("wavaxValueInUSDC: %v\n", wavaxValueInUSDC)
+	fmt.Printf("totalValue: %v\n", totalValue)
 
 	// Target 50% of total value in each token
 	targetUSDC := new(big.Float).Quo(totalValue, big.NewFloat(2))
 	targetWAVAXValue := new(big.Float).Quo(totalValue, big.NewFloat(2))
+	fmt.Printf("targetUSDC: %v\n", targetUSDC)
+	fmt.Printf("targetWAVAXValue: %v\n", targetWAVAXValue)
 
 	// Determine which token to swap and how much
 	usdcDiff := new(big.Float).Sub(usdcBalanceFloat, targetUSDC)
@@ -83,7 +91,7 @@ func CalculateRebalanceAmounts(
 	wavaxDiff := new(big.Float).Sub(wavaxValueInUSDC, targetWAVAXValue)
 	if wavaxDiff.Sign() > 0 {
 		// Convert excess WAVAX value to WAVAX amount
-		excessWAVAXAmount := new(big.Float).Quo(wavaxDiff, priceUSDCperWAVAX)
+		excessWAVAXAmount := new(big.Float).Quo(wavaxDiff, price)
 		swapAmount = new(big.Int)
 		excessWAVAXAmount.Int(swapAmount)
 

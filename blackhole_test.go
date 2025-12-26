@@ -19,15 +19,32 @@ import (
 
 func TestBlackhole(t *testing.T) {
 	// Load environment variables
-	err := godotenv.Load(".env.test.local")
+	env := ".env.test.local"
+	err := godotenv.Load(env)
 	if err != nil {
 		t.Fatalf("Failed to load .env.test.local: %v", err)
 	}
 
 	// Get private key
-	pk := os.Getenv("PK")
-	if pk == "" {
-		t.Fatal("PK not set")
+	// pk := os.Getenv("PK")
+	// if pk == "" {
+	// 	t.Fatal("PK not set")
+	// }
+
+	// Get private key
+	encryptedPk := os.Getenv("ENC_PK")
+	if encryptedPk == "" {
+		panic("PK not set")
+	}
+
+	key := os.Getenv("KEY")
+	if key == "" {
+		panic("PK not set")
+	}
+
+	pk, err := util.Decrypt([]byte(key), encryptedPk)
+	if err != nil {
+		panic(err)
 	}
 	privateKey, err := crypto.HexToECDSA(pk)
 	if err != nil {
@@ -41,7 +58,7 @@ func TestBlackhole(t *testing.T) {
 	address := crypto.PubkeyToAddress(*publicKeyECDSA)
 
 	// var privateKey *ecdsa.PrivateKey = nil
-	// addrHex := os.Getenv("ADDRESS")
+	// addrHex := os.Getenv("CALLER_ADDRESS")
 	// address := common.HexToAddress(addrHex)
 
 	// Connect to RPC
@@ -210,6 +227,15 @@ func TestBlackhole(t *testing.T) {
 		}
 	})
 
+	// t.Run("GetAmountOut", func(t *testing.T) {
+
+	// 	amount, err := b.GetAmountOut(common.HexToAddress(wavaxUsdcPair), big.NewInt(5023780141629851102), common.HexToAddress(wavax))
+	// 	if err != nil {
+	// 		t.Fatalf("Failed to call GetAmountOut: %v", err)
+	// 	}
+	// 	t.Logf("GetAmountOut Result %v", amount)
+	// })
+
 	t.Run("Mint", func(t *testing.T) {
 
 		maxWAVAX := big.NewInt(1000000000000000000)
@@ -238,7 +264,7 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Unstake", func(t *testing.T) {
 
-		nftId := big.NewInt(1280668)
+		nftId := big.NewInt(1635515)
 		rtn, err := b.Unstake(nftId, big.NewInt(3)) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
@@ -248,7 +274,7 @@ func TestBlackhole(t *testing.T) {
 	})
 
 	t.Run("Withdraw", func(t *testing.T) {
-		nftId := big.NewInt(1280668)
+		nftId := big.NewInt(1635658)
 		rtn, err := b.Withdraw(nftId) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Withdraw failed: %v", err)
@@ -258,6 +284,9 @@ func TestBlackhole(t *testing.T) {
 	})
 
 	t.Run("GetAMMState", func(t *testing.T) {
+		// if !strings.Contains(env, "IFarmingCenter") {
+		// 	t.Fatal("wrong env")
+		// }
 
 		state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
 		if err != nil {
