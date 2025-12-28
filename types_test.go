@@ -1,10 +1,9 @@
 package blackholedex
 
 import (
+	"blackholego/pkg/util"
 	"math/big"
 	"testing"
-
-	"blackholego/internal/util"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/assert"

@@ -3,8 +3,8 @@ package main
 import (
 	blackholedex "blackholego"
 	"blackholego/configs"
-	"blackholego/internal/util"
 	"blackholego/pkg/txlistener"
+	"blackholego/pkg/util"
 	"context"
 	"fmt"
 	"os"

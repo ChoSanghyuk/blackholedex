@@ -1,7 +1,7 @@
 package contractclient
 
 import (
-	"blackholego/internal/util"
+	"blackholego/pkg/util"
 	"encoding/json"
 	"fmt"
 	"math/big"

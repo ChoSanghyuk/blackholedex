@@ -1,9 +1,9 @@
 package blackholedex
 
 import (
-	"blackholego/internal/util"
 	"blackholego/pkg/contractclient"
 	"blackholego/pkg/txlistener"
+	"blackholego/pkg/util"
 	"crypto/ecdsa"
 
 	"math/big"

@@ -1,9 +1,9 @@
 package blackholedex
 
 import (
-	"blackholego/internal/util"
 	"blackholego/pkg/contractclient"
 	"blackholego/pkg/types"
+	"blackholego/pkg/util"
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
