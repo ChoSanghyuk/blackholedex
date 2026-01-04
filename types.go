@@ -142,6 +142,23 @@ type MintParams struct {
 	Deadline       *big.Int       `json:"deadline"`
 }
 
+// Position represents a liquidity position returned by positions() function
+// Matches the return values from NonfungiblePositionManager.positions(tokenId)
+type Position struct {
+	Nonce                    *big.Int       `json:"nonce"`                    // uint88
+	Operator                 common.Address `json:"operator"`                 // address
+	Token0                   common.Address `json:"token0"`                   // address
+	Token1                   common.Address `json:"token1"`                   // address
+	Deployer                 common.Address `json:"deployer"`                 // address
+	TickLower                int32          `json:"tickLower"`                // int24
+	TickUpper                int32          `json:"tickUpper"`                // int24
+	Liquidity                *big.Int       `json:"liquidity"`                // uint128
+	FeeGrowthInside0LastX128 *big.Int       `json:"feeGrowthInside0LastX128"` // uint256
+	FeeGrowthInside1LastX128 *big.Int       `json:"feeGrowthInside1LastX128"` // uint256
+	TokensOwed0              *big.Int       `json:"tokensOwed0"`              // uint128
+	TokensOwed1              *big.Int       `json:"tokensOwed1"`              // uint128
+}
+
 // ERC20 types
 
 // ApproveParams represents parameters for ERC20 approve function
@@ -324,6 +341,8 @@ type StrategyConfig struct {
 	CircuitBreakerWindow time.Duration
 	// CircuitBreakerThreshold defines max errors allowed in window before halting (default: 5, minimum: 3)
 	CircuitBreakerThreshold int
+
+	// InitPhase StrategyPhase
 }
 
 // StrategyState tracks the current operational state and position information during strategy execution
@@ -422,6 +441,7 @@ func DefaultStrategyConfig() *StrategyConfig {
 		// MaxUSDC:                 nil,              // Must be set by user
 		CircuitBreakerWindow:    5 * time.Minute, // 5-minute error window
 		CircuitBreakerThreshold: 5,               // 5 errors before halt
+		// InitPhase:               Initializing,
 	}
 }
 

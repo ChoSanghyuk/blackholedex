@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
 )
@@ -32,34 +31,34 @@ func TestBlackhole(t *testing.T) {
 	// }
 
 	// Get private key
-	encryptedPk := os.Getenv("ENC_PK")
-	if encryptedPk == "" {
-		panic("PK not set")
-	}
+	// encryptedPk := os.Getenv("ENC_PK")
+	// if encryptedPk == "" {
+	// 	panic("PK not set")
+	// }
 
-	key := os.Getenv("KEY")
-	if key == "" {
-		panic("PK not set")
-	}
+	// key := os.Getenv("KEY")
+	// if key == "" {
+	// 	panic("PK not set")
+	// }
 
-	pk, err := util.Decrypt([]byte(key), encryptedPk)
-	if err != nil {
-		panic(err)
-	}
-	privateKey, err := crypto.HexToECDSA(pk)
-	if err != nil {
-		t.Fatalf("Failed to parse private key: %v", err)
-	}
-	publicKey := privateKey.Public()
-	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatal("error casting public key to ECDSA")
-	}
-	address := crypto.PubkeyToAddress(*publicKeyECDSA)
+	// pk, err := util.Decrypt([]byte(key), encryptedPk)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// privateKey, err := crypto.HexToECDSA(pk)
+	// if err != nil {
+	// 	t.Fatalf("Failed to parse private key: %v", err)
+	// }
+	// publicKey := privateKey.Public()
+	// publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	// if !ok {
+	// 	t.Fatal("error casting public key to ECDSA")
+	// }
+	// address := crypto.PubkeyToAddress(*publicKeyECDSA)
 
-	// var privateKey *ecdsa.PrivateKey = nil
-	// addrHex := os.Getenv("CALLER_ADDRESS")
-	// address := common.HexToAddress(addrHex)
+	var privateKey *ecdsa.PrivateKey = nil
+	addrHex := os.Getenv("CALLER_ADDRESS")
+	address := common.HexToAddress(addrHex)
 
 	// Connect to RPC
 	rpcURL := os.Getenv("RPC_URL")

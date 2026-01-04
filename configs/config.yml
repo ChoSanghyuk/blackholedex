@@ -4,8 +4,8 @@ rpc:
 
 contract_client:
   routerv2:
-      address: 0x04E1dee021Cd12bBa022A72806441B43d8212Fec
-      abi: blackholedex-contracts/abi/RouterV2.json
+    address: 0x04E1dee021Cd12bBa022A72806441B43d8212Fec
+    abi: blackholedex-contracts/abi/RouterV2.json
   usdc:
     address: 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
     abi: blackholedex-contracts/abi/ERC20.json
@@ -24,3 +24,13 @@ contract_client:
   farmingCenter:
     address: 0xa47Ad2C95FaE476a73b85A355A5855aDb4b3A449
     abi: blackholedex-contracts/abi/IFarmingCenter.json
+
+strategy:
+  monitoringIntervalSec: 60
+  stabilityThreshold: 0.005
+  stabilityIntervals: 5
+  rangeWidth: 10
+  slippagePct: 5
+  circuitBreakerWindowMin: 5
+  circuitBreakerThreshold: 5
+  initPhase: 1  #Initializing : 0, ActiveMonitoring: 1, RebalancingRequired: 2, WaitingForStability: 3, Halted: 4

@@ -57,9 +57,15 @@ type ContractClientConfig struct {
 	Abipath string
 }
 
-func NewBlackhole(pk string, tl TxListener, rpcURL string, configs []ContractClientConfig) (*Blackhole, error) {
+type BlackholeConfig struct {
+	Url     string // "https://api.avax.network/ext/bc/C/rpc"
+	Pk      string
+	Configs []ContractClientConfig
+}
 
-	privateKey, err := crypto.HexToECDSA(pk)
+func NewBlackhole(client *ethclient.Client, conf *BlackholeConfig, tl TxListener) (*Blackhole, error) {
+
+	privateKey, err := crypto.HexToECDSA(conf.Pk)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to parse private key: %v", err)
 	}
@@ -70,12 +76,12 @@ func NewBlackhole(pk string, tl TxListener, rpcURL string, configs []ContractCli
 	}
 	address := crypto.PubkeyToAddress(*publicKeyECDSA)
 
-	client, err := ethclient.Dial(rpcURL)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to RPC: %v", err)
-	}
+	// client, err := ethclient.Dial(conf.Url)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Failed to connect to RPC: %v", err)
+	// }
 	ccm := make(map[string]ContractClient)
-	for _, c := range configs {
+	for _, c := range conf.Configs {
 		ABI, err := util.LoadABI(c.Abipath)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to load ABI: %v", err)
@@ -103,7 +109,6 @@ func (b *Blackhole) RunStrategy1(
 	ctx context.Context,
 	reportChan chan<- string,
 	config *StrategyConfig,
-	initPhase StrategyPhase,
 ) error {
 	// T051: Validate configuration at start
 	if err := config.Validate(); err != nil {
@@ -112,7 +117,7 @@ func (b *Blackhole) RunStrategy1(
 
 	// T052: Initialize StrategyState
 	state := &StrategyState{
-		CurrentState:      initPhase,
+		// CurrentState:      config.InitPhase,
 		NFTTokenID:        nil,
 		TickLower:         0,
 		TickUpper:         0,
@@ -141,6 +146,67 @@ func (b *Blackhole) RunStrategy1(
 		RequiredIntervals: config.StabilityIntervals,
 		LastPrice:         nil,
 		StableCount:       0,
+	}
+
+	tokenIDs, err := b.GetUserPositions()
+	if err != nil {
+		return fmt.Errorf("failed to get user positions: %w", err)
+	}
+	if tokenIDs == nil || len(tokenIDs) == 0 {
+		// starting in Initializing phase
+		state.CurrentState = Initializing
+	} else {
+		// starting in ActiveMonitoring phase
+		state.CurrentState = ActiveMonitoring
+
+		// Use the first position (most recent)
+		// In the future, you might want to filter by token pair or let user specify
+		nftTokenID := tokenIDs[0]
+
+		position, err := b.GetPositionDetails(nftTokenID)
+		if err != nil {
+			return fmt.Errorf("failed to get position details for token ID %s: %w", nftTokenID.String(), err)
+		}
+
+		// Validate that this is a WAVAX/USDC position
+		wavaxAddr := common.HexToAddress(wavax)
+		usdcAddr := common.HexToAddress(usdc)
+		if (position.Token0 != wavaxAddr && position.Token1 != wavaxAddr) ||
+			(position.Token0 != usdcAddr && position.Token1 != usdcAddr) {
+			return fmt.Errorf("position token ID %s is not a WAVAX/USDC pair (token0=%s, token1=%s)",
+				nftTokenID.String(), position.Token0.Hex(), position.Token1.Hex())
+		}
+
+		// Check if position has liquidity
+		if position.Liquidity.Sign() == 0 {
+			return fmt.Errorf("position token ID %s has zero liquidity", nftTokenID.String())
+		}
+
+		// Initialize state with existing position
+		state.NFTTokenID = nftTokenID
+		state.TickLower = position.TickLower
+		state.TickUpper = position.TickUpper
+		state.PositionCreatedAt = time.Now() // We don't know the exact creation time
+
+		sendReport(reportChan, StrategyReport{
+			Timestamp: time.Now(),
+			EventType: "position_loaded",
+			Message: fmt.Sprintf("Loaded existing position: NFT ID %s, TickLower=%d, TickUpper=%d, Liquidity=%s",
+				nftTokenID.String(), position.TickLower, position.TickUpper, position.Liquidity.String()),
+			Phase:      &state.CurrentState,
+			NFTTokenID: nftTokenID,
+			PositionDetails: &PositionSnapshot{
+				NFTTokenID: nftTokenID,
+				TickLower:  position.TickLower,
+				TickUpper:  position.TickUpper,
+				Liquidity:  position.Liquidity,
+				FeeGrowth0: position.FeeGrowthInside0LastX128,
+				FeeGrowth1: position.FeeGrowthInside1LastX128,
+				Timestamp:  time.Now(),
+			},
+		})
+
+		log.Printf("Loaded existing position: NFT ID %s", nftTokenID.String())
 	}
 
 	// T055: Send strategy_start report
@@ -262,7 +328,7 @@ func (b *Blackhole) RunStrategy1(
 
 			case ActiveMonitoring:
 				// T059: Monitor pool price
-				outOfRange, err := b.monitoringLoop(ctx, config, state, reportChan)
+				outOfRange, err := b.monitoringLoop(ctx, state, reportChan)
 				if err != nil {
 					// T064, T065: Error handling
 					critical := util.IsCriticalError(err)
@@ -1154,6 +1220,78 @@ func (b *Blackhole) TokenOfOwnerByIndex(index *big.Int) (*big.Int, error) {
 	}
 
 	return rtnRaw[0].(*big.Int), nil
+}
+
+// GetUserPositions retrieves all NFT position token IDs owned by the user
+// Returns a slice of token IDs and an error if the operation fails
+func (b *Blackhole) GetUserPositions() ([]*big.Int, error) {
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	// Get the balance of NFTs owned by the user
+	balanceResult, err := nftManagerClient.Call(nil, "balanceOf", b.myAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get NFT balance: %w", err)
+	}
+
+	balance := balanceResult[0].(*big.Int)
+	if balance.Sign() == 0 {
+		return []*big.Int{}, nil // No positions owned
+	}
+
+	// Iterate through all token IDs
+	tokenIDs := make([]*big.Int, 0, balance.Int64())
+	for i := int64(0); i < balance.Int64(); i++ {
+		tokenID, err := b.TokenOfOwnerByIndex(big.NewInt(i))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get token ID at index %d: %w", i, err)
+		}
+		tokenIDs = append(tokenIDs, tokenID)
+	}
+
+	return tokenIDs, nil
+}
+
+// GetPositionDetails retrieves the detailed information for a specific position NFT
+// Returns a Position struct containing all position data
+func (b *Blackhole) GetPositionDetails(tokenID *big.Int) (*Position, error) {
+	if tokenID == nil || tokenID.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid token ID: must be positive")
+	}
+
+	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get NFT manager client: %w", err)
+	}
+
+	// Call positions(tokenId) function
+	positionResult, err := nftManagerClient.Call(nil, "positions", tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get position details for token ID %s: %w", tokenID.String(), err)
+	}
+
+	// Parse the returned values according to the ABI
+	// positions() returns: (nonce, operator, token0, token1, deployer, tickLower, tickUpper,
+	//                       liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128,
+	//                       tokensOwed0, tokensOwed1)
+	position := &Position{
+		Nonce:                    positionResult[0].(*big.Int),
+		Operator:                 positionResult[1].(common.Address),
+		Token0:                   positionResult[2].(common.Address),
+		Token1:                   positionResult[3].(common.Address),
+		Deployer:                 positionResult[4].(common.Address),
+		TickLower:                int32(positionResult[5].(*big.Int).Int64()),
+		TickUpper:                int32(positionResult[6].(*big.Int).Int64()),
+		Liquidity:                positionResult[7].(*big.Int),
+		FeeGrowthInside0LastX128: positionResult[8].(*big.Int),
+		FeeGrowthInside1LastX128: positionResult[9].(*big.Int),
+		TokensOwed0:              positionResult[10].(*big.Int),
+		TokensOwed1:              positionResult[11].(*big.Int),
+	}
+
+	return position, nil
 }
 
 /*
@@ -2216,7 +2354,6 @@ func (b *Blackhole) executeRebalancing(
 // Returns true if out-of-range detected, false otherwise, or error
 func (b *Blackhole) monitoringLoop(
 	ctx context.Context,
-	config *StrategyConfig,
 	state *StrategyState,
 	reportChan chan<- string,
 ) (bool, error) {
@@ -2252,12 +2389,13 @@ func (b *Blackhole) monitoringLoop(
 	isOutOfRange := positionRange.IsOutOfRange(poolState.Tick)
 
 	// T039: Send monitoring report
-	sendReport(reportChan, StrategyReport{
-		Timestamp: time.Now(),
-		EventType: "monitoring",
-		Message:   fmt.Sprintf("Price check: tick=%d, range=[%d, %d], out_of_range=%v", poolState.Tick, state.TickLower, state.TickUpper, isOutOfRange),
-		Phase:     &state.CurrentState,
-	})
+	// sendReport(reportChan, StrategyReport{
+	// 	Timestamp: time.Now(),
+	// 	EventType: "monitoring",
+	// 	Message:   fmt.Sprintf("Price check: tick=%d, range=[%d, %d], out_of_range=%v", poolState.Tick, state.TickLower, state.TickUpper, isOutOfRange),
+	// 	Phase:     &state.CurrentState,
+	// })
+	log.Printf(fmt.Sprintf("[monitoring] Price check: tick=%d, range=[%d, %d], out_of_range=%v\n", poolState.Tick, state.TickLower, state.TickUpper, isOutOfRange))
 
 	// T038: Transition to RebalancingRequired if out of range
 	if isOutOfRange {

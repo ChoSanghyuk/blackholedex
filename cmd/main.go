@@ -47,23 +47,24 @@ func main() {
 		txlistener.WithTimeout(5*time.Minute),
 	)
 
+	blackholeConf := conf.ToBlackholeConfigs()
+	blackholeConf.Pk = pk
 	blackhole, err := blackholedex.NewBlackhole(
-		pk,
+		client,
+		blackholeConf,
 		listener,
-		conf.RPC,
-		conf.ToContractClientConfigs(),
 	)
 	if err != nil {
 		panic(err)
 	}
 
+	strategyConf := conf.ToStrategyConfig()
 	reportChan := make(chan string)
 	go func() {
 		err := blackhole.RunStrategy1(
 			context.Background(),
 			reportChan,
-			blackholedex.DefaultStrategyConfig(),
-			blackholedex.RebalancingRequired,
+			strategyConf,
 		)
 		fmt.Printf("RunStrategy1 오류 발생. %s", err)
 	}()
