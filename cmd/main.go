@@ -3,6 +3,7 @@ package main
 import (
 	blackholedex "blackholego"
 	"blackholego/configs"
+	"blackholego/internal/db"
 	"blackholego/pkg/txlistener"
 	"blackholego/pkg/util"
 	"context"
@@ -43,16 +44,21 @@ func main() {
 
 	listener := txlistener.NewTxListener(
 		client,
-		txlistener.WithPollInterval(2*time.Second),
+		txlistener.WithPollInterval(3*time.Second),
 		txlistener.WithTimeout(5*time.Minute),
 	)
 
-	blackholeConf := conf.ToBlackholeConfigs()
-	blackholeConf.Pk = pk
+	recorder, err := db.NewMySQLRecorder(fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", "root", "root", "127.0.0.1", "3306", "investdb")) //
+	if err != nil {
+		panic(err)
+	}
+
+	blackholeConf := conf.ToBlackholeConfigs(pk)
 	blackhole, err := blackholedex.NewBlackhole(
 		client,
 		blackholeConf,
 		listener,
+		recorder,
 	)
 	if err != nil {
 		panic(err)

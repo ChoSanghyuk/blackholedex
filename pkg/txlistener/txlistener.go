@@ -84,12 +84,12 @@ func (tl *TxListener) WaitForTransaction(txHash common.Hash) (*contracttypes.TxR
 				// Other errors should be returned
 				return nil, fmt.Errorf("failed to get receipt for transaction %s: %w", txHash.Hex(), err)
 			}
-
+			fmt.Printf("%v\n", receipt)
 			// Receipt found - check if transaction was successful
 			if receipt.Status == "0x0" {
 				return receipt, fmt.Errorf("%w: transaction %s status is 0x0", ErrTransactionFailed, txHash.Hex())
 			}
-
+			// time.Sleep(1 * time.Second) // memo. RPC State Lag 문제 해결.
 			return receipt, nil
 		}
 	}

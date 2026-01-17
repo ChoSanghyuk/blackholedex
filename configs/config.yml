@@ -12,6 +12,9 @@ contract_client:
   wavax:
     address: 0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7
     abi: blackholedex-contracts/abi/ERC20.json
+  black:
+    address: 0xcd94a87696fac69edae3a70fe5725307ae1c43f6
+    abi: blackholedex-contracts/abi/ERC20.json
   wavaxUsdcPair:
     address: 0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0
     abi: blackholedex-contracts/abi/IAlgebraPoolState.json
@@ -29,7 +32,7 @@ strategy:
   monitoringIntervalSec: 60
   stabilityThreshold: 0.005
   stabilityIntervals: 5
-  rangeWidth: 10
+  rangeWidth: 6
   slippagePct: 5
   circuitBreakerWindowMin: 5
   circuitBreakerThreshold: 5

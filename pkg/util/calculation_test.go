@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"log"
 	"math/big"
 	"testing"
 
@@ -61,10 +62,41 @@ func TestCalculateRebalanceAmounts(t *testing.T) {
 		assert.Equal(t, 0, tokenToSwap)
 		fmt.Printf("tokenToSwap : %v, swapAmount: %v\n", tokenToSwap, swapAmount)
 	})
-
 }
 
-/*
-279069233386509245994440
-     3306379361727413336
+// CalculateTickBounds + TickToSqrtPriceX96 + SqrtPriceToPrice
+func TestCalculatePriceBounds(t *testing.T) {
+
+	var currentTick int32 = -249587 // GetAMMState 결과
+	rangeWidth := 2
+	tickSpacing := 200
+	// T014: Calculate tick bounds
+	tickLower, tickUpper, err := CalculateTickBounds(currentTick, rangeWidth, tickSpacing)
+	if err != nil {
+
+	}
+	log.Printf("CurrentTick: %d,TickLower: %d, TickUpper: %d", currentTick, tickLower, tickUpper)
+
+	currentSqrtPrice := TickToSqrtPriceX96(int(currentTick))
+	lowerSqrtPrice := TickToSqrtPriceX96(int(tickLower))
+	upperSqrtPrice := TickToSqrtPriceX96(int(tickUpper))
+
+	decimalAdjustment := new(big.Float).SetInt64(1_000_000_000_000) // 10^12
+	currentPrice := new(big.Float).Mul(decimalAdjustment, SqrtPriceToPrice(currentSqrtPrice))
+	lowerPrice := new(big.Float).Mul(decimalAdjustment, SqrtPriceToPrice(lowerSqrtPrice))
+	upperPrice := new(big.Float).Mul(decimalAdjustment, SqrtPriceToPrice(upperSqrtPrice))
+
+	log.Printf("PriceCurrent: %.02f, PriceLower: %.02f, PriceUpper: %.02f", currentPrice, lowerPrice, upperPrice)
+}
+
+/* -1247 -289400
+2026/01/07 12:51:51 CurrentTick: -249587,TickLower: -249600, TickUpper: -249200
+2026/01/07 12:51:51 PriceCurrent: 14.49, PriceLower: 14.47, PriceUpper: 15.06
+
+2026/01/07 18:19:02 CurrentTick: -249587,TickLower: -249800, TickUpper: -249400
+2026/01/07 18:19:02 PriceCurrent: 14.49, PriceLower: 14.19, PriceUpper: 14.77
+
+
+2026/01/07 12:53:26 CurrentTick: -249587,TickLower: -249800, TickUpper: -249000
+2026/01/07 12:53:26 PriceCurrent: 14.49, PriceLower: 14.19, PriceUpper: 15.37
 */

@@ -107,7 +107,7 @@ Avalanche Blackhole Dex에 유동성 공급자로 참여하면서, 자동적으�
             "from": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
             "to": "0xcd94a87696fac69edae3a70fe5725307ae1c43f6",
             "stable": false,
-            "concentrated": false,
+            "concentrated": false, // 이건 true로 세팅해서 사용하기
             "receiver": "0xb4dd4fb3d4bced984cce972991fb100488b59223"
           }
         ]
@@ -126,8 +126,12 @@ Avalanche Blackhole Dex에 유동성 공급자로 참여하면서, 자동적으�
     "rawData": "a6FlQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLQDS2LOwvWhAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAC03U+z1LztmEzOlymR+xAEiLWSIwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABpJ/qBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAU5KW+0uXmiO4aXKOkkUJQ0avVcwAAAAAAAAAAAAAAALMfZqo8HnhTY/CHWht04nuF/WbHAAAAAAAAAAAAAAAAzZSodpb6xp7a46cP5XJTB64cQ/YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAtN1Ps9S87ZhMzpcpkfsQBIi1kiM="
   }
   ```
-
-
+  - stable : determines the mathematical formula (invariant) used for the swap in Basic Pools (V2-style).
+    - false (Volatile): Uses the standard Constant Product Formula ($x \times y = k$). This is designed for assets that fluctuate in price relative to each other 
+    - true (Stable): Uses a StableSwap Invariant (similar to Curve, e.g., $x^3y + y^3x = k$). This is optimized for correlated assets that should stay at a 1:1 price ratio, providing much lower slippage.
+  - concentrated : whether to use the Concentrated Liquidity engine (V3-style) instead of a standard V2-style pool.
+    - false: The router looks for a "Basic Pool" where liquidity is distributed infinitely across the entire price curve (from 0 to infinity).
+    - true: The router looks for a Concentrated Liquidity Pool. In these pools, liquidity is provided within specific price ranges (ticks)
 
 ### Mint NFT (유동성 공급)
 
@@ -313,3 +317,28 @@ blackholego.(*Blackhole).RunStrategy1(0x1400044e000, {0x102904fd0, 0x102bc7d20},
         /Users/84455/workspace/blackhole_dex/blackhole.go:2082 +0x268
 created by main.main in goroutine 1
         /Users/84455/workspace/blackhole_dex/cmd/main.go:60 +0x3c0
+
+
+## 이슈 기록
+
+### RPC State Lag (Node Desync)
+- 현상
+  - 사전 트랜잭션에 대한 receipt까지 받은 후 후속 요청을 보냈지만 실패
+  - 잠시 기다렸다가 시도 시 성공
+- 원인
+  - The Load Balancer "Desync"
+      1. Most public RPC endpoints (like api.avax.network) use a load balancer that sits in front of dozens of different nodes.
+      2. Transaction 1: Hits Node A. Node A processes it, includes it in a block, and gives you a success receipt.
+      3. Transaction 2: You send it immediately. The load balancer might route this request to Node B.
+    => The Problem: Node B might be a few milliseconds behind Node A. It hasn't "seen" the block containing your first transaction yet. If Transaction 2 depends on the state changed in Transaction 1 (like a balance update or a contract flag), Node B will reject it as invalid.
+    :bulb: EstimateGas 단계에서 에러가 발생하는 것이라 nonce와 무관하게 에러 발생.
+
+
+### execution reverted: STF
+- 개요
+  - a specific short-code used in Uniswap V3-style contracts
+  - Safe Transfer Failed의 약어
+- common cause
+  - Insufficient Balance
+  - Incomplete Approval
+  - RPC State Lag

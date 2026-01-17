@@ -48,7 +48,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
-func (c *Config) ToBlackholeConfigs() *blackholedex.BlackholeConfig {
+func (c *Config) ToBlackholeConfigs(pk string) *blackholedex.BlackholeConfig {
 	var configs []blackholedex.ContractClientConfig
 
 	for _, data := range c.ContractClient {
@@ -57,11 +57,12 @@ func (c *Config) ToBlackholeConfigs() *blackholedex.BlackholeConfig {
 			Abipath: data.ABI,
 		})
 	}
-
-	return &blackholedex.BlackholeConfig{
-		Url:     c.RPC,
-		Configs: configs,
-	}
+	return blackholedex.NewBlackholeConfig(
+		c.RPC,
+		pk,
+		nil, // todo. 필요시 config.yaml에서 별도 설정.
+		configs,
+	)
 }
 
 func (c *Config) ToStrategyConfig() *blackholedex.StrategyConfig {

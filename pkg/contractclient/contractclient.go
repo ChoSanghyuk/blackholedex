@@ -25,6 +25,7 @@ type ContractClient struct {
 	abi             *abi.ABI
 	client          *ethclient.Client
 	chainId         *big.Int
+	defaultGasLimit *big.Int
 }
 
 /*
@@ -38,7 +39,7 @@ func (cm *EvmContractCodec) ChainId() (*big.Int, error) {
 }
 */
 
-func NewContractClient(client *ethclient.Client, contractAddress common.Address, abi *abi.ABI) *ContractClient {
+func NewContractClient(client *ethclient.Client, contractAddress common.Address, abi *abi.ABI, opts ...Option) *ContractClient {
 	chainID := big.NewInt(0)
 	if client != nil {
 		cid, err := client.ChainID(context.Background())
@@ -48,11 +49,26 @@ func NewContractClient(client *ethclient.Client, contractAddress common.Address,
 		chainID = cid
 	}
 
-	return &ContractClient{
+	cc := &ContractClient{
 		contractAddress: contractAddress,
 		abi:             abi,
 		client:          client,
 		chainId:         chainID,
+	}
+
+	for _, opt := range opts {
+		opt(cc)
+	}
+
+	return cc
+}
+
+// Option is a functional option for configuring ContractClient
+type Option func(*ContractClient)
+
+func WithDefaultGasLimit(gasLimit *big.Int) Option {
+	return func(cc *ContractClient) {
+		cc.defaultGasLimit = gasLimit
 	}
 }
 
@@ -83,15 +99,15 @@ func (cm *ContractClient) Call(from *common.Address, method string, args ...inte
 	return rtn, nil
 }
 
-func (cm *ContractClient) Send(priority contracttypes.Priority, fixedGasLimit *big.Int, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
-	return cm.send(priority, fixedGasLimit, nil, from, privateKey, method, args...)
+func (cm *ContractClient) Send(priority contracttypes.Priority, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
+	return cm.send(priority, nil, from, privateKey, method, args...)
 }
 
-func (cm *ContractClient) SendWithValue(priority contracttypes.Priority, fixedGasLimit *big.Int, value *big.Int, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
-	return cm.send(priority, fixedGasLimit, value, from, privateKey, method, args...)
+func (cm *ContractClient) SendWithValue(priority contracttypes.Priority, value *big.Int, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
+	return cm.send(priority, value, from, privateKey, method, args...)
 }
 
-func (cm *ContractClient) send(priority contracttypes.Priority, fixedGasLimit *big.Int, value *big.Int, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
+func (cm *ContractClient) send(priority contracttypes.Priority, value *big.Int, from *common.Address, privateKey *ecdsa.PrivateKey, method string, args ...interface{}) (common.Hash, error) {
 	if from == nil {
 		from = &common.Address{}
 	}
@@ -115,21 +131,21 @@ func (cm *ContractClient) send(priority contracttypes.Priority, fixedGasLimit *b
 
 	gasLimit := uint64(0)
 	// Estimate gas limit
-	if fixedGasLimit == nil {
-		gasLimit, err = cm.client.EstimateGas(context.Background(), ethereum.CallMsg{
-			From:  *from,
-			To:    &cm.contractAddress,
-			Data:  packed,
-			Value: nil, //big.NewInt(),
-		})
-		if err != nil {
+	gasLimit, err = cm.client.EstimateGas(context.Background(), ethereum.CallMsg{
+		From:  *from,
+		To:    &cm.contractAddress,
+		Data:  packed,
+		Value: nil, //big.NewInt(),
+	})
+	if err != nil {
+		if cm.defaultGasLimit != nil {
+			gasLimit = cm.defaultGasLimit.Uint64()
+		} else {
 			return common.Hash{}, errors.Join(fmt.Errorf("%s Send 시, EstimateGas Error", method), err)
 		}
-		if priority == contracttypes.High {
-			gasLimit = gasLimit * 2
-		}
-	} else {
-		gasLimit = fixedGasLimit.Uint64()
+	}
+	if priority == contracttypes.High {
+		gasLimit = gasLimit * 2
 	}
 
 	// Calculate gas tip cap (priority fee) - typically 1-2 Gwei
@@ -200,17 +216,6 @@ func (cm *ContractClient) TestSend(priority contracttypes.Priority, from *common
 	if err != nil {
 		return common.Hash{}, errors.Join(fmt.Errorf("%s Send 시, SuggestGasPrice Error", ""), err)
 	}
-
-	// Estimate gas limit
-	// gasLimit, err := cm.client.EstimateGas(context.Background(), ethereum.CallMsg{
-	// 	From:  *from,
-	// 	To:    &cm.contractAddress,
-	// 	Data:  packed,
-	// 	Value: nil, //big.NewInt(),
-	// })
-	// if err != nil {
-	// 	return common.Hash{}, errors.Join(fmt.Errorf("%s Send 시, EstimateGas Error", method), err)
-	// }
 
 	packed := common.Hex2Bytes("3593564c000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000686c74a80000000000000000000000000000000000000000000000000000000000000003000604000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000f4240000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002bb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e0001f4b31f66aa3c1e785363f0875a1b74e27b85fd66c70000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000b31f66aa3c1e785363f0875a1b74e27b85fd66c70000000000000000000000001682f533c2359834167e5e4e108c1bfb69920e7800000000000000000000000000000000000000000000000000000000000000190000000000000000000000000000000000000000000000000000000000000060000000000000000000000000b31f66aa3c1e785363f0875a1b74e27b85fd66c7000000000000000000000000b4dd4fb3d4bced984cce972991fb100488b5922300000000000000000000000000000000000000000000000000c4e7233be3d9df0c")
 
