@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	contracttypes "blackholego/pkg/types"
 
@@ -72,6 +73,17 @@ func WithDefaultGasLimit(gasLimit *big.Int) Option {
 	}
 }
 
+func (cm *ContractClient) CallWithRetry(from *common.Address, method string, args ...interface{}) (rtn []interface{}, err error) {
+	for range 5 {
+		rtn, err = cm.Call(from, method, args...)
+		if err == nil { // 성공 시, 바로 통과
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	return rtn, err
+}
 func (cm *ContractClient) Call(from *common.Address, method string, args ...interface{}) ([]interface{}, error) {
 
 	if from == nil {

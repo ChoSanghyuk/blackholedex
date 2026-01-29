@@ -11,7 +11,7 @@ import (
 
 func TestSqrtPriceToPrice(t *testing.T) {
 
-	val, _ := big.NewInt(0).SetString("280057970020625981233062", 0)
+	val, _ := big.NewInt(0).SetString("267326922672530907272725", 0)
 	priceRaw := SqrtPriceToPrice(val)
 
 	// expected, _ := big.NewInt(0).SetString("304011615425126403287043", 10)

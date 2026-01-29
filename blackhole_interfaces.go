@@ -31,6 +31,9 @@ type TxReader interface {
 	// Call executes a read-only contract method (does not create transaction)
 	Call(from *common.Address, method string, args ...interface{}) ([]interface{}, error)
 
+	// Call executes a read-only contract method (does not create transaction)
+	CallWithRetry(from *common.Address, method string, args ...interface{}) ([]interface{}, error)
+
 	// GetReceipt retrieves transaction receipt by hash
 	GetReceipt(txHash common.Hash) (*types.TxReceipt, error)
 
