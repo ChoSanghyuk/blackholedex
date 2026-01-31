@@ -123,6 +123,7 @@ func (b *Blackhole) RunStrategy1(
 	// T052: Initialize StrategyState
 	state := &StrategyState{
 		// CurrentState:      config.InitPhase,
+		CurrentStep:       Step_None, // Will be set when entering a phase that needs substeps
 		NFTTokenID:        nil,
 		TickLower:         0,
 		TickUpper:         0,
@@ -250,6 +251,7 @@ func (b *Blackhole) RunStrategy1(
 			switch state.CurrentState {
 			case Initializing:
 				// T062: Re-enter position after stability confirmed
+				// The initialPositionEntry function will resume from state.CurrentStep if retrying
 				mintResult, err := b.initialPositionEntry(config, state, reportChan)
 				if err != nil {
 					// T064, T065: Error handling
@@ -259,22 +261,25 @@ func (b *Blackhole) RunStrategy1(
 					sendReport(reportChan, StrategyReport{
 						Timestamp: time.Now(),
 						EventType: "error",
-						Message:   "Position re-entry failed",
+						Message:   fmt.Sprintf("Position re-entry failed at step %s", state.CurrentStep.String()),
 						Error:     err.Error(),
 						Phase:     &state.CurrentState,
 					})
 
 					if shouldHalt {
 						state.CurrentState = Halted
+						state.CurrentStep = Step_None
+					} else {
+						// Keep CurrentStep as-is to retry from last successful checkpoint
+						// Stay in Initializing phase to retry
+						log.Printf("[Retry] Will retry Initializing phase from step: %s", state.CurrentStep.String())
 					}
-					// Retry stability check
-					state.CurrentState = WaitingForStability
-					stabilityWindow.Reset()
 					continue
 				}
 
 				// T063: Transition back to ActiveMonitoring
 				state.CurrentState = ActiveMonitoring
+				state.CurrentStep = Step_None // Reset step for new phase
 				log.Printf("Position re-entry successful: NFT ID %s", mintResult.NFTTokenID.String())
 
 				// Record snapshot after completing Initializing phase
@@ -313,6 +318,7 @@ func (b *Blackhole) RunStrategy1(
 
 			case RebalancingRequired:
 				// T060: Execute rebalancing workflow
+				// The executeRebalancing function will resume from state.CurrentStep if retrying
 				_, err := b.executeRebalancing(config, state, nonce, reportChan)
 				if err != nil {
 					// T064, T065: Error handling
@@ -322,22 +328,26 @@ func (b *Blackhole) RunStrategy1(
 					sendReport(reportChan, StrategyReport{
 						Timestamp: time.Now(),
 						EventType: "error",
-						Message:   "Rebalancing failed",
+						Message:   fmt.Sprintf("Rebalancing failed at step %s", state.CurrentStep.String()),
 						Error:     err.Error(),
 						Phase:     &state.CurrentState,
 					})
 
 					if shouldHalt {
 						state.CurrentState = Halted
+						state.CurrentStep = Step_None
+					} else {
+						// Keep CurrentStep as-is to retry from last successful checkpoint
+						// Stay in RebalancingRequired phase to retry
+						log.Printf("[Retry] Will retry RebalancingRequired phase from step: %s", state.CurrentStep.String())
 					}
-					// Reset to ActiveMonitoring to retry
-					state.CurrentState = ActiveMonitoring
 					continue
 				}
 
 				// Rebalancing successful, transition to WaitingForStability
 				state.CurrentState = WaitingForStability
-				stabilityWindow.Reset() // Start fresh stability tracking
+				state.CurrentStep = Step_None // Reset step for new phase
+				stabilityWindow.Reset()       // Start fresh stability tracking
 				log.Printf("Rebalancing completed, waiting for price stability")
 
 				// Record snapshot after completing RebalancingRequired phase
@@ -402,11 +412,17 @@ func (b Blackhole) Client(address string) (ContractClient, error) {
 // initialPositionEntry orchestrates the creation of the initial balanced liquidity position (T019-T024)
 // Steps: validate balances → calculate rebalance → swap if needed → mint → stake
 // Returns: StakingResult with NFT ID and position details, or error
+// Supports checkpoint/resume: resumes from state.CurrentStep if retrying after failure
 func (b *Blackhole) initialPositionEntry(
 	config *StrategyConfig,
 	state *StrategyState,
 	reportChan chan<- string,
 ) (*StakingResult, error) {
+
+	// Initialize step if starting fresh
+	if state.CurrentStep > Step_Init_StakeCompleted {
+		state.CurrentStep = Step_None
+	}
 
 	sendReport(reportChan, StrategyReport{
 		Timestamp: time.Now(),
@@ -538,31 +554,59 @@ func (b *Blackhole) initialPositionEntry(
 			usdcBalance = usdcBalanceRaw[0].(*big.Int)
 		}
 	}
-	mintResult, err := b.Mint(wavaxBalance, usdcBalance, config.RangeWidth, config.SlippagePct)
-	if err != nil {
-		return nil, fmt.Errorf("mint failed: %w", err)
+
+	// Step: Mint position (skip if already completed)
+	var mintResult *StakingResult
+	if state.CurrentStep < Step_Init_MintCompleted {
+		var err error
+		mintResult, err = b.Mint(wavaxBalance, usdcBalance, config.RangeWidth, config.SlippagePct)
+		if err != nil {
+			return nil, fmt.Errorf("mint failed: %w", err)
+		}
+
+		state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, mintResult.TotalGasCost)
+		sendReport(reportChan, StrategyReport{
+			Timestamp:     time.Now(),
+			EventType:     "gas_cost",
+			Message:       "Mint transaction completed",
+			GasCost:       mintResult.TotalGasCost,
+			CumulativeGas: state.CumulativeGas,
+			Phase:         &state.CurrentState,
+		})
+
+		// Checkpoint: mint completed
+		state.CurrentStep = Step_Init_MintCompleted
+		state.NFTTokenID = mintResult.NFTTokenID // Store NFT ID immediately for resume capability
+		log.Printf("[Checkpoint] Mint completed: NFT ID=%s, gas=%s", mintResult.NFTTokenID.String(), mintResult.TotalGasCost.String())
+	} else {
+		// Resume: NFT already minted, reconstruct mintResult for return value
+		// Note: In a real resume scenario, we'd load this from persistent storage
+		log.Printf("[Resume] Mint already completed, NFT ID=%s", state.NFTTokenID.String())
+		mintResult = &StakingResult{
+			NFTTokenID:     state.NFTTokenID,
+			FinalTickLower: state.TickLower,
+			FinalTickUpper: state.TickUpper,
+			// Other fields would be loaded from storage in production
+		}
 	}
 
-	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, mintResult.TotalGasCost)
-	sendReport(reportChan, StrategyReport{
-		Timestamp:     time.Now(),
-		EventType:     "gas_cost",
-		Message:       "Mint transaction completed",
-		GasCost:       mintResult.TotalGasCost,
-		CumulativeGas: state.CumulativeGas,
-		Phase:         &state.CurrentState,
-	})
+	// Step: Stake the minted NFT (skip if already completed)
+	if state.CurrentStep < Step_Init_StakeCompleted {
+		stakeResult, err := b.Stake(mintResult.NFTTokenID)
+		if err != nil {
+			return nil, fmt.Errorf("stake failed: %w", err)
+		}
 
-	// T022: Stake the minted NFT
-	stakeResult, err := b.Stake(mintResult.NFTTokenID)
-	if err != nil {
-		return nil, fmt.Errorf("stake failed: %w", err)
+		state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, stakeResult.TotalGasCost)
+
+		// Checkpoint: stake completed
+		state.CurrentStep = Step_Init_StakeCompleted
+		log.Printf("[Checkpoint] Stake completed: NFT ID=%s, gas=%s", mintResult.NFTTokenID.String(), stakeResult.TotalGasCost.String())
+	} else {
+		log.Printf("[Resume] Stake already completed, NFT ID=%s", state.NFTTokenID.String())
 	}
 
-	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, stakeResult.TotalGasCost)
-
-	// T024: Update StrategyState
-	state.NFTTokenID = mintResult.NFTTokenID
+	// T024: Update StrategyState (NFTTokenID already set at mint checkpoint)
 	state.TickLower = mintResult.FinalTickLower
 	state.TickUpper = mintResult.FinalTickUpper
 	state.PositionCreatedAt = time.Now()
@@ -666,12 +710,14 @@ func (b *Blackhole) executeWithdraw(
 // executeRebalancing orchestrates the full rebalancing workflow (T027-T034)
 // Steps: unstake → withdraw → calculate rebalance → swap → update state
 // Does NOT create new position - that happens after stability check
+// Supports checkpoint/resume: resumes from state.CurrentStep if retrying after failure
 func (b *Blackhole) executeRebalancing(
 	config *StrategyConfig,
 	state *StrategyState,
 	nonce *big.Int,
 	reportChan chan<- string,
 ) (*RebalanceWorkflow, error) {
+
 	// T028: Create RebalanceWorkflow for tracking
 	workflow := &RebalanceWorkflow{
 		StartTime:    time.Now(),
@@ -685,7 +731,7 @@ func (b *Blackhole) executeRebalancing(
 	sendReport(reportChan, StrategyReport{
 		Timestamp: time.Now(),
 		EventType: "rebalance_start",
-		Message:   "Starting rebalancing workflow",
+		Message:   fmt.Sprintf("Starting rebalancing workflow from step: %s", state.CurrentStep.String()),
 		Phase:     &state.CurrentState,
 	})
 
@@ -699,33 +745,50 @@ func (b *Blackhole) executeRebalancing(
 		state.NFTTokenID = nftId
 	}
 
-	// T025: Execute unstake
-	unstakeResult, err := b.executeUnstake(state.NFTTokenID, nonce, state, reportChan)
-	if err != nil {
-		workflow.Success = false
-		workflow.ErrorMessage = err.Error()
-		return workflow, err
+	// Step: Execute unstake (skip if already completed)
+	if state.CurrentStep < Step_Rebalance_UnstakeCompleted {
+		unstakeResult, err := b.executeUnstake(state.NFTTokenID, nonce, state, reportChan)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = err.Error()
+			return workflow, err
+		}
+
+		// T030: Track cumulative gas
+		workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, unstakeResult.TotalGasCost)
+
+		// T031: Track cumulative rewards
+		if unstakeResult.Rewards != nil {
+			state.CumulativeRewards = new(big.Int).Add(state.CumulativeRewards, unstakeResult.Rewards.Reward)
+		}
+
+		// Checkpoint: unstake completed
+		state.CurrentStep = Step_Rebalance_UnstakeCompleted
+		log.Printf("[Checkpoint] Unstake completed: NFT ID=%s, gas=%s", state.NFTTokenID.String(), unstakeResult.TotalGasCost.String())
+	} else {
+		log.Printf("[Resume] Unstake already completed, NFT ID=%s", state.NFTTokenID.String())
 	}
 
-	// T030: Track cumulative gas
-	workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, unstakeResult.TotalGasCost)
+	// Step: Execute withdraw (skip if already completed)
+	if state.CurrentStep < Step_Rebalance_WithdrawCompleted {
+		withdrawResult, err := b.executeWithdraw(state.NFTTokenID, state, reportChan)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = err.Error()
+			return workflow, err
+		}
 
-	// T031: Track cumulative rewards
-	if unstakeResult.Rewards != nil {
-		state.CumulativeRewards = new(big.Int).Add(state.CumulativeRewards, unstakeResult.Rewards.Reward)
+		workflow.WithdrawResult = withdrawResult
+		// T030: Track cumulative gas
+		workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, withdrawResult.TotalGasCost)
+
+		// Checkpoint: withdraw completed
+		state.CurrentStep = Step_Rebalance_WithdrawCompleted
+		log.Printf("[Checkpoint] Withdraw completed: NFT ID=%s, amount0=%s, amount1=%s, gas=%s",
+			state.NFTTokenID.String(), withdrawResult.Amount0.String(), withdrawResult.Amount1.String(), withdrawResult.TotalGasCost.String())
+	} else {
+		log.Printf("[Resume] Withdraw already completed, NFT ID=%s", state.NFTTokenID.String())
 	}
-
-	// T026: Execute withdraw
-	withdrawResult, err := b.executeWithdraw(state.NFTTokenID, state, reportChan)
-	if err != nil {
-		workflow.Success = false
-		workflow.ErrorMessage = err.Error()
-		return workflow, err
-	}
-
-	workflow.WithdrawResult = withdrawResult
-	// T030: Track cumulative gas
-	workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, withdrawResult.TotalGasCost)
 
 	// T032, T033: Calculate and report net P&L
 	netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
@@ -743,6 +806,10 @@ func (b *Blackhole) executeRebalancing(
 
 	workflow.Duration = time.Since(workflow.StartTime)
 	workflow.Success = true
+
+	// Reset step counter for next phase
+	state.CurrentStep = Step_None
+	log.Printf("[Phase Complete] RebalancingRequired phase completed, resetting step to None")
 
 	return workflow, nil
 }
