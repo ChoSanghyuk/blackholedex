@@ -309,6 +309,17 @@ const (
 	Halted
 )
 
+// String returns human-readable phase name
+func (sp StrategyPhase) String() string {
+	return [...]string{
+		"Initializing",
+		"ActiveMonitoring",
+		"RebalancingRequired",
+		"WaitingForStability",
+		"Halted",
+	}[sp]
+}
+
 // StrategyStep tracks precise substeps within each phase for checkpoint/resume capability
 type StrategyStep int
 
@@ -327,28 +338,11 @@ const (
 func (ss StrategyStep) String() string {
 	return [...]string{
 		"None",
-		"Init_Start",
-		"Init_BalanceChecked",
-		"Init_RebalanceCalculated",
-		"Init_SwapCompleted",
 		"Init_MintCompleted",
 		"Init_StakeCompleted",
-		"Rebalance_Start",
 		"Rebalance_UnstakeCompleted",
 		"Rebalance_WithdrawCompleted",
 	}[ss]
-}
-
-// String returns human-readable phase name
-func (sp StrategyPhase) String() string {
-	return [...]string{
-		"Initializing",
-		"ActiveMonitoring",
-		"RebalancingRequired",
-		"WaitingForStability",
-		"ExecutingRebalancing",
-		"Halted",
-	}[sp]
 }
 
 // StrategyConfig defines configuration parameters for RunStrategy1 execution
