@@ -73,10 +73,10 @@ func TestBlackhole(t *testing.T) {
 	}
 
 	// Setup Router contract
-	// routerAddr := os.Getenv("ROUTERV2_ADDR")
-	// if routerAddr == "" {
-	// 	t.Fatal("ROUTERV2_ADDR not set in .env.test.local")
-	// }
+	routerAddr := os.Getenv("ROUTERV2_ADDR")
+	if routerAddr == "" {
+		t.Fatal("ROUTERV2_ADDR not set in .env.test.local")
+	}
 	routerABIPath := os.Getenv("ROUTERV2_ABI_PATH")
 	if routerABIPath == "" {
 		t.Fatal("ROUTERV2_ABI_PATH not set in .env.test.local")
@@ -85,9 +85,21 @@ func TestBlackhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load router ABI: %v", err)
 	}
-	swapClient := contractclient.NewContractClient(client, common.HexToAddress(routerv2), routerABI)
+	swapClient := contractclient.NewContractClient(client, common.HexToAddress(routerAddr), routerABI)
 
 	// Create ERC20 clients
+	usdcAddr := os.Getenv("USDC_ADDR")
+	if usdcAddr == "" {
+		t.Fatal("USDC_ADDR not set in .env.test.local")
+	}
+	wavaxAddr := os.Getenv("WAVAX_ADDR")
+	if wavaxAddr == "" {
+		t.Fatal("WAVAX_ADDR not set in .env.test.local")
+	}
+	blackAddr := os.Getenv("BLACK_ADDR")
+	if blackAddr == "" {
+		t.Fatal("BLACK_ADDR not set in .env.test.local")
+	}
 	erc20ABIPath := os.Getenv("ERC20_ABI_PATH")
 	if erc20ABIPath == "" {
 		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
@@ -96,52 +108,77 @@ func TestBlackhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load ERC20 ABI: %v", err)
 	}
-	usdcClient := contractclient.NewContractClient(client, common.HexToAddress(usdc), erc20ABI)
-	wavaxClient := contractclient.NewContractClient(client, common.HexToAddress(wavax), erc20ABI)
+	usdcClient := contractclient.NewContractClient(client, common.HexToAddress(usdcAddr), erc20ABI)
+	wavaxClient := contractclient.NewContractClient(client, common.HexToAddress(wavaxAddr), erc20ABI)
+	blackClient := contractclient.NewContractClient(client, common.HexToAddress(blackAddr), erc20ABI)
 
 	// Create Wavax/usdc pool clients
-	poolStateABIPath := os.Getenv("POOLSTATE_ABI_PATH")
-	if erc20ABIPath == "" {
-		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	poolAddr := os.Getenv("POOL_ADDR")
+	if poolAddr == "" {
+		t.Fatal("POOL_ADDR not set in .env.test.local")
+	}
+	poolStateABIPath := os.Getenv("POOL_ABI_PATH")
+	if poolStateABIPath == "" {
+		t.Fatal("POOL_ABI_PATH not set in .env.test.local")
 	}
 	poolStateABI, err := util.LoadABI(poolStateABIPath)
 	if err != nil {
-		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+		t.Fatalf("Failed to load pool state ABI: %v", err)
 	}
-	wausPoolClient := contractclient.NewContractClient(client, common.HexToAddress(wavaxUsdcPair), poolStateABI)
+	wausPoolClient := contractclient.NewContractClient(client, common.HexToAddress(poolAddr), poolStateABI)
 
 	// Create NFTPositionManager clients
+	nftManagerAddr := os.Getenv("NFTMANAGER_ADDR")
+	if nftManagerAddr == "" {
+		t.Fatal("NFTMANAGER_ADDR not set in .env.test.local")
+	}
 	nftPositionManagerABIPath := os.Getenv("NFTMANAGER_ABI_PATH")
-	if erc20ABIPath == "" {
-		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	if nftPositionManagerABIPath == "" {
+		t.Fatal("NFTMANAGER_ABI_PATH not set in .env.test.local")
 	}
 	nftPositionManagerABI, err := util.LoadABI(nftPositionManagerABIPath)
 	if err != nil {
-		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+		t.Fatalf("Failed to load NFT manager ABI: %v", err)
 	}
-	nftPositionManagerClient := contractclient.NewContractClient(client, common.HexToAddress(nonfungiblePositionManager), nftPositionManagerABI)
+	nftPositionManagerClient := contractclient.NewContractClient(client, common.HexToAddress(nftManagerAddr), nftPositionManagerABI)
 
-	// Create NFTPositionManager clients
+	// Create Gauge clients
+	gaugeAddr := os.Getenv("GAUGE_ADDR")
+	if gaugeAddr == "" {
+		t.Fatal("GAUGE_ADDR not set in .env.test.local")
+	}
 	gaugeABIPath := os.Getenv("GAUGE_ABI_PATH")
-	if erc20ABIPath == "" {
-		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	if gaugeABIPath == "" {
+		t.Fatal("GAUGE_ABI_PATH not set in .env.test.local")
 	}
 	gaugeABI, err := util.LoadABI(gaugeABIPath)
 	if err != nil {
-		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+		t.Fatalf("Failed to load gauge ABI: %v", err)
 	}
-	gaugeClient := contractclient.NewContractClient(client, common.HexToAddress(gauge), gaugeABI)
+	gaugeClient := contractclient.NewContractClient(client, common.HexToAddress(gaugeAddr), gaugeABI)
 
-	// Create NFTPositionManager clients
-	farmingCenterABIPath := os.Getenv("FARMING_CENTER")
-	if erc20ABIPath == "" {
-		t.Fatal("ERC20_ABI_PATH not set in .env.test.local")
+	// Create FarmingCenter clients
+	farmingCenterAddr := os.Getenv("FARMING_CENTER_ADDR")
+	if farmingCenterAddr == "" {
+		t.Fatal("FARMING_CENTER_ADDR not set in .env.test.local")
+	}
+	farmingCenterABIPath := os.Getenv("FARMING_CENTER_ABI_PATH")
+	if farmingCenterABIPath == "" {
+		t.Fatal("FARMING_CENTER_ABI_PATH not set in .env.test.local")
 	}
 	farmingCenterABI, err := util.LoadABI(farmingCenterABIPath)
 	if err != nil {
-		t.Fatalf("Failed to load ERC20 ABI: %v", err)
+		t.Fatalf("Failed to load farming center ABI: %v", err)
 	}
-	farmingCenterClient := contractclient.NewContractClient(client, common.HexToAddress(farmingCenter), farmingCenterABI)
+	farmingCenterClient := contractclient.NewContractClient(client, common.HexToAddress(farmingCenterAddr), farmingCenterABI)
+
+	// Create Deployer client
+	deployerAddr := os.Getenv("DEPLOYER_ADDR")
+	if deployerAddr == "" {
+		t.Fatal("DEPLOYER_ADDR not set in .env.test.local")
+	}
+
+	deployerClient := contractclient.NewContractClient(client, common.HexToAddress(deployerAddr), nil)
 
 	// Setup TxListener
 	listener := txlistener.NewTxListener(
@@ -159,10 +196,12 @@ func TestBlackhole(t *testing.T) {
 			routerv2:                   swapClient,
 			usdc:                       usdcClient,
 			wavax:                      wavaxClient,
+			black:                      blackClient,
 			wavaxUsdcPair:              wausPoolClient,
 			nonfungiblePositionManager: nftPositionManagerClient,
 			gauge:                      gaugeClient,
 			farmingCenter:              farmingCenterClient,
+			deployer:                   deployerClient,
 		},
 	}
 
@@ -239,8 +278,8 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Mint", func(t *testing.T) {
 
-		maxWAVAX := big.NewInt(1000000000000000000)
-		maxUSDC := big.NewInt(13000000)
+		maxWAVAX := big.NewInt(287932277390323786)
+		maxUSDC := big.NewInt(2966233)
 		rangeWidth := 10
 		slippagePct := 5
 
@@ -254,7 +293,7 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Stake", func(t *testing.T) {
 
-		nftId := big.NewInt(1721175)
+		nftId := big.NewInt(2274616)
 		rtn, err := b.Stake(nftId)
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
@@ -265,8 +304,8 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Unstake", func(t *testing.T) {
 
-		nftId := big.NewInt(1635515)
-		rtn, err := b.Unstake(nftId, big.NewInt(3)) // todo Nonce 구하는 법
+		nftId := big.NewInt(2274616)
+		rtn, err := b.Unstake(nftId, big.NewInt(1)) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
 		}
@@ -275,7 +314,7 @@ func TestBlackhole(t *testing.T) {
 	})
 
 	t.Run("Withdraw", func(t *testing.T) {
-		nftId := big.NewInt(1635658)
+		nftId := big.NewInt(2274616)
 		rtn, err := b.Withdraw(nftId) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Withdraw failed: %v", err)
@@ -289,7 +328,7 @@ func TestBlackhole(t *testing.T) {
 		// 	t.Fatal("wrong env")
 		// }
 
-		state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
+		state, err := b.GetAMMState()
 		if err != nil {
 			t.Fatalf("Failed to call GetAMMState: %v", err)
 		}

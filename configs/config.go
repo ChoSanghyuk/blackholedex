@@ -11,9 +11,17 @@ import (
 
 // Config represents the entire configuration structure from config.yml
 type Config struct {
-	RPC              string                            `yaml:"rpc"`
-	ContractClient   map[string]ContractClientYAMLData `yaml:"contract_client"`
-	StrategyYAMLData StrategyYAMLData                  `yaml:"strategy"`
+	RPC              string                `yaml:"rpc"`
+	ActivePool       string                `yaml:"active_pool"`
+	ContractClient   ContractClientSection `yaml:"contract_client"`
+	StrategyYAMLData StrategyYAMLData      `yaml:"strategy"`
+}
+
+// ContractClientSection represents the contract_client section with common and pool-specific configs
+type ContractClientSection struct {
+	Common map[string]ContractClientYAMLData `yaml:"common"`
+	CL200  map[string]ContractClientYAMLData `yaml:"cl200"`
+	CL1    map[string]ContractClientYAMLData `yaml:"cl1"`
 }
 
 // ContractClientYAMLData represents a single contract configuration from YAML
@@ -51,16 +59,47 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) ToBlackholeConfigs(pk string) *blackholedex.BlackholeConfig {
 	var configs []blackholedex.ContractClientConfig
 
-	for _, data := range c.ContractClient {
+	// Add common contracts
+	for name, data := range c.ContractClient.Common {
 		configs = append(configs, blackholedex.ContractClientConfig{
+			Name:    name,
 			Address: data.Address,
 			Abipath: data.ABI,
 		})
 	}
+
+	// Add pool-specific contracts based on active_pool
+	var poolContracts map[string]ContractClientYAMLData
+	switch c.ActivePool {
+	case "cl1":
+		poolContracts = c.ContractClient.CL1
+	case "cl200":
+		poolContracts = c.ContractClient.CL200
+	}
+
+	for name, data := range poolContracts {
+		configs = append(configs, blackholedex.ContractClientConfig{
+			Name:    name,
+			Address: data.Address,
+			Abipath: data.ABI,
+		})
+	}
+
+	var pool blackholedex.PoolType
+	switch c.ActivePool {
+	case "cl1":
+		pool = blackholedex.CL1
+	case "cl200":
+		pool = blackholedex.CL200
+	default:
+		pool = blackholedex.CL200 // default to CL200 if unknown
+	}
+
 	return blackholedex.NewBlackholeConfig(
 		c.RPC,
 		pk,
 		nil, // todo. 필요시 config.yaml에서 별도 설정.
+		pool,
 		configs,
 	)
 }

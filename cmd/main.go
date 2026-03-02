@@ -48,7 +48,12 @@ func main() {
 		txlistener.WithTimeout(5*time.Minute),
 	)
 
-	recorder, err := db.NewMySQLRecorder(fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", "root", "root", "127.0.0.1", "3306", "investdb")) //
+	password := os.Getenv("DB_PASSWORD")
+	if password == "" {
+		panic("DB_PASSWORD not set")
+	}
+
+	recorder, err := db.NewMySQLRecorder(fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", "root", password, "127.0.0.1", "3306", "investdb")) //
 	if err != nil {
 		panic(err)
 	}
