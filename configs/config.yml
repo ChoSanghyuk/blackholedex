@@ -3,7 +3,7 @@ rpc:
   https://api.avax.network/ext/bc/C/rpc
 
 # Active pool selection: "cl200" or "cl1"
-active_pool: cl1
+active_pool: cl200
 
 contract_client:
   common:

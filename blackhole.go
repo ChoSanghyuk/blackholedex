@@ -106,6 +106,7 @@ func NewBlackhole(client *ethclient.Client, conf *BlackholeConfig, tl TxListener
 	}
 
 	return &Blackhole{
+		poolType:   conf.poolType,
 		privateKey: privateKey,
 		myAddr:     address,
 		client:     client,
@@ -1119,14 +1120,21 @@ func (b *Blackhole) GetCurrentAssetSnapshot(state StrategyPhase) (*CurrentAssetS
 	totalValue = new(big.Int).Add(totalValue, avaxValueInUSDC)
 	totalValue = new(big.Int).Add(totalValue, blackValueInUSDC)
 
+	// Calculate EstimatedAvax from TotalValue using current price
+	// EstimatedAvax = TotalValue / price
+	totalValueFloat := new(big.Float).SetInt(totalValue)
+	estimatedAvaxFloat := new(big.Float).Quo(totalValueFloat, price)
+	estimatedAvax, _ := estimatedAvaxFloat.Int(nil)
+
 	snapshot := &CurrentAssetSnapshot{
-		Timestamp:    time.Now(),
-		CurrentState: state,
-		TotalValue:   totalValue,
-		AmountWavax:  wavaxBalance,
-		AmountUsdc:   usdcBalance,
-		AmountBlack:  blackBalance,
-		AmountAvax:   avaxBalance,
+		Timestamp:     time.Now(),
+		CurrentState:  state,
+		TotalValue:    totalValue,
+		EstimatedAvax: estimatedAvax,
+		AmountWavax:   wavaxBalance,
+		AmountUsdc:    usdcBalance,
+		AmountBlack:   blackBalance,
+		AmountAvax:    avaxBalance,
 	}
 
 	return snapshot, nil

@@ -240,6 +240,7 @@ func (b *Blackhole) Mint(
 	}
 
 	// T014: Calculate tick bounds
+	log.Printf("CalculateTickBounds: %d,rangeWidth: %d, tickSpacing: %d", state.Tick, rangeWidth, tickSpacing)
 	tickLower, tickUpper, err := util.CalculateTickBounds(state.Tick, rangeWidth, tickSpacing)
 	if err != nil {
 		return &StakingResult{
