@@ -1,6 +1,8 @@
 package blackholedex
 
 import (
+	// "blackholego/pkg/util"
+	"blackholego/pkg/types"
 	"blackholego/pkg/util"
 	"math/big"
 	"testing"
@@ -17,9 +19,9 @@ func TestPacking(t *testing.T) {
 
 		// 로컬 Parameter로 동일한 데이터 packing
 		amountOutMin, _ := big.NewInt(0).SetString("1045988962367239812513", 10)
-		params := SWAPExactETHForTokensParams{
+		params := types.SWAPExactETHForTokensParams{
 			AmountOutMin: amountOutMin,
-			Routes: []Route{
+			Routes: []types.Route{
 				{
 					Pair:         common.HexToAddress("0x14e4a5bed2e5e688ee1a5ca3a4914250d1abd573"),
 					From:         common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"),
@@ -57,10 +59,10 @@ func TestPacking(t *testing.T) {
 		// 로컬 Parameter로 동일한 데이터 packing
 		amountIn, _ := big.NewInt(0).SetString("", 10)
 		amountOutMin, _ := big.NewInt(0).SetString("", 10)
-		params := SWAPExactTokensForTokensParams{
+		params := types.SWAPExactTokensForTokensParams{
 			AmountIn:     amountIn,
 			AmountOutMin: amountOutMin,
-			Routes: []Route{
+			Routes: []types.Route{
 				{
 					Pair:         common.HexToAddress(""),
 					From:         common.HexToAddress(""),
@@ -103,7 +105,7 @@ func TestPacking(t *testing.T) {
 		amount1Min := big.NewInt(58314800)
 		deadline, _ := big.NewInt(0).SetString("1763392863027", 10)
 
-		params := MintParams{
+		params := types.MintParams{
 			Token0:         common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"),
 			Token1:         common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"),
 			Deployer:       common.HexToAddress("0x5d433a94a4a2aa8f9aa34d8d15692dc2e9960584"),
@@ -139,7 +141,7 @@ func TestPacking(t *testing.T) {
 		// Sample data for approve function
 		amount, _ := big.NewInt(0).SetString("3750793819555087051", 10)
 
-		params := ApproveParams{
+		params := types.ApproveParams{
 			Spender: common.HexToAddress("0x3fED017EC0f5517Cdf2E8a9a4156c64d74252146"),
 			Amount:  amount,
 		}
@@ -159,7 +161,7 @@ func TestPacking(t *testing.T) {
 }
 
 func TestAddLiquidityParams(t *testing.T) {
-	params := AddLiquidityParams{
+	params := types.AddLiquidityParams{
 		TokenA:         common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"),
 		TokenB:         common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
 		Stable:         false,
@@ -179,7 +181,7 @@ func TestAddLiquidityParams(t *testing.T) {
 }
 
 func TestVoteParams(t *testing.T) {
-	params := VoteParams{
+	params := types.VoteParams{
 		TokenID: big.NewInt(123),
 		Pools: []common.Address{
 			common.HexToAddress("0x1111111111111111111111111111111111111111"),

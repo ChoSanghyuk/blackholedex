@@ -3,6 +3,7 @@ package blackholedex
 import (
 	"blackholego/pkg/contractclient"
 	"blackholego/pkg/txlistener"
+	"blackholego/pkg/types"
 	"blackholego/pkg/util"
 	"crypto/ecdsa"
 
@@ -186,23 +187,23 @@ func TestBlackhole(t *testing.T) {
 		txlistener.WithPollInterval(2*time.Second),
 		txlistener.WithTimeout(5*time.Minute),
 	)
-
+	ccm := map[string]ContractClient{
+		routerv2:                   swapClient,
+		usdc:                       usdcClient,
+		wavax:                      wavaxClient,
+		black:                      blackClient,
+		wavaxUsdcPair:              wausPoolClient,
+		nonfungiblePositionManager: nftPositionManagerClient,
+		gauge:                      gaugeClient,
+		farmingCenter:              farmingCenterClient,
+		deployer:                   deployerClient,
+	}
 	// Create Blackhole instance
 	b := &Blackhole{
 		privateKey: privateKey,
 		myAddr:     address,
 		tl:         listener,
-		ccm: map[string]ContractClient{
-			routerv2:                   swapClient,
-			usdc:                       usdcClient,
-			wavax:                      wavaxClient,
-			black:                      blackClient,
-			wavaxUsdcPair:              wausPoolClient,
-			nonfungiblePositionManager: nftPositionManagerClient,
-			gauge:                      gaugeClient,
-			farmingCenter:              farmingCenterClient,
-			deployer:                   deployerClient,
-		},
+		registry:   NewContractRegistry(ccm),
 	}
 
 	t.Run("SwapTokens", func(t *testing.T) {
@@ -223,10 +224,10 @@ func TestBlackhole(t *testing.T) {
 
 		// Create swap parameters
 		deadline := big.NewInt(time.Now().Add(20 * time.Minute).Unix())
-		params := &SWAPExactTokensForTokensParams{
+		params := &types.SWAPExactTokensForTokensParams{
 			AmountIn:     amountInBig,
 			AmountOutMin: amountOutMinBig,
-			Routes: []Route{
+			Routes: []types.Route{
 				{
 					Pair:         common.HexToAddress(wavaxUsdcPair),
 					From:         common.HexToAddress(wavax),
@@ -278,8 +279,8 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Mint", func(t *testing.T) {
 
-		maxWAVAX := big.NewInt(287932277390323786)
-		maxUSDC := big.NewInt(2966233)
+		maxWAVAX := big.NewInt(188845000000000000) // 188845000000000000
+		maxUSDC := big.NewInt(1878702)
 		rangeWidth := 10
 		slippagePct := 5
 
@@ -293,7 +294,7 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Stake", func(t *testing.T) {
 
-		nftId := big.NewInt(2274616)
+		nftId := big.NewInt(2519306)
 		rtn, err := b.Stake(nftId)
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
@@ -304,7 +305,7 @@ func TestBlackhole(t *testing.T) {
 
 	t.Run("Unstake", func(t *testing.T) {
 
-		nftId := big.NewInt(2274616)
+		nftId := big.NewInt(2519306)
 		rtn, err := b.Unstake(nftId, big.NewInt(1)) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Stake failed: %v", err)
@@ -314,7 +315,7 @@ func TestBlackhole(t *testing.T) {
 	})
 
 	t.Run("Withdraw", func(t *testing.T) {
-		nftId := big.NewInt(2274616)
+		nftId := big.NewInt(2519306)
 		rtn, err := b.Withdraw(nftId) // todo Nonce 구하는 법
 		if err != nil {
 			t.Fatalf("Withdraw failed: %v", err)
@@ -334,41 +335,4 @@ func TestBlackhole(t *testing.T) {
 		}
 		t.Logf("GetAMMState Result %v", state)
 	})
-
-	// t.Run("Mint", func(t *testing.T) {
-	// 	clg := 200 // CL Gap
-	// 	lpg := 3   // Liquidity Providing Gap
-	// 	// maxP := 0.8 // max portion
-	// 	var slippage int64 = 10
-	// 	state, err := b.GetAMMState(common.HexToAddress(wavaxUsdcPair))
-	// 	if err != nil {
-	// 		t.Fatalf("Failed to call GetAMMState: %v", err)
-	// 	}
-	// 	tickLower := (int(state.Tick)/clg - lpg) * 200
-	// 	tickUpper := (int(state.Tick)/clg + lpg) * 200
-	// 	wavaxClient, err := b.Client(wavax)
-	// 	outputs, err := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
-	// 	wavaxBalace := outputs[0].(*big.Int)
-	// 	// wavaxMax := wavaxBalace.Sub()
-	// 	usdcClient, err := b.Client(usdc)
-	// 	outputs, err = usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
-	// 	usdcBalace := outputs[0].(*big.Int)
-	// 	amount0Desired, amount1Desired, l := util.ComputeAmounts(state.SqrtPrice, int(state.Tick), tickLower, tickUpper, wavaxBalace, usdcBalace)
-	// 	t.Logf("liquidity : %v\n", l)
-	// 	deadline := big.NewInt(time.Now().Add(20 * time.Minute).Unix())
-	// 	params := &MintParams{
-	// 		Token0:         common.HexToAddress(wavax),
-	// 		Token1:         common.HexToAddress(usdc),
-	// 		Deployer:       common.HexToAddress(deployer),
-	// 		TickLower:      big.NewInt(int64(tickLower)),
-	// 		TickUpper:      big.NewInt(int64(tickUpper)),
-	// 		Amount0Desired: amount0Desired,
-	// 		Amount1Desired: amount1Desired,
-	// 		Amount0Min:     amount0Desired.Mul(amount0Desired, big.NewInt(100-slippage)).Div(amount0Desired, big.NewInt(100)),
-	// 		Amount1Min:     amount1Desired.Mul(amount1Desired, big.NewInt(100-slippage)).Div(amount0Desired, big.NewInt(100)),
-	// 		Recipient:      b.myAddr,
-	// 		Deadline:       deadline,
-	// 	}
-	// 	t.Logf("MintParams : %v\n", params)
-	// })
 }

@@ -1,7 +1,7 @@
 package db
 
 import (
-	blackholedex "blackholego"
+	"blackholego/pkg/types"
 	"fmt"
 	"math/big"
 	"time"
@@ -65,7 +65,7 @@ func NewMySQLRecorderWithDB(db *gorm.DB) (*MySQLRecorder, error) {
 }
 
 // RecordReport implements TransactionRecorder interface
-func (r *MySQLRecorder) RecordReport(snapshot blackholedex.CurrentAssetSnapshot) error {
+func (r *MySQLRecorder) RecordReport(snapshot types.CurrentAssetSnapshot) error {
 	record := AssetSnapshotRecord{
 		Timestamp:     snapshot.Timestamp,
 		CurrentState:  int(snapshot.CurrentState),
@@ -130,7 +130,7 @@ func (r *MySQLRecorder) GetSnapshotsByTimeRange(start, end time.Time) ([]AssetSn
 }
 
 // GetSnapshotsByPhase retrieves all snapshots for a specific strategy phase
-func (r *MySQLRecorder) GetSnapshotsByPhase(phase blackholedex.StrategyPhase) ([]AssetSnapshotRecord, error) {
+func (r *MySQLRecorder) GetSnapshotsByPhase(phase types.StrategyPhase) ([]AssetSnapshotRecord, error) {
 	var records []AssetSnapshotRecord
 	result := r.db.Where("current_state = ?", int(phase)).
 		Order("timestamp ASC").

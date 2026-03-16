@@ -593,7 +593,32 @@ b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e000000000000000000000000
 
 
 
-
+  types/
+  ├── contract_params.go     # ~150 lines - Contract interaction parameters
+  │   ├── Route, SWAPExactTokensForTokensParams
+  │   ├── MintParams, DecreaseLiquidityParams, CollectParams
+  │   ├── AddLiquidityParams, RemoveLiquidityParams
+  │   └── CreateLockParams, VoteParams, GaugeDepositParams, etc.
+  │
+  ├── operation_results.go   # ~100 lines - Operation result types
+  │   ├── TransactionRecord
+  │   ├── StakingResult, UnstakeResult, WithdrawResult
+  │   └── RewardAmounts
+  │
+  ├── strategy_types.go      # ~250 lines - Strategy execution types
+  │   ├── StrategyConfig, StrategyState, StrategyPhase
+  │   ├── StrategyReport, CurrentAssetSnapshot, PositionSnapshot
+  │   ├── PositionRange, StabilityWindow, CircuitBreaker
+  │   └── RebalanceWorkflow
+  │
+  ├── pool_types.go          # ~100 lines - Pool/Position state
+  │   ├── AMMState
+  │   ├── Position
+  │   └── IncentiveKey
+  │
+  └── enums.go               # ~50 lines - Enums and constants
+      ├── PoolType, StrategyPhase, StrategyStep
+      └── Helper methods (poolNonce, tickSpacing, String, etc.)
 
 
 

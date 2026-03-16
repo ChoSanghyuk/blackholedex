@@ -3,8 +3,6 @@ package blackholedex
 import (
 	"blackholego/pkg/types"
 	"blackholego/pkg/util"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -12,197 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 )
-
-// Swap performs a token-to-token swap on Blackhole DEX
-// It first approves the swap router to spend the input token, then executes the swap
-func (b *Blackhole) Swap(
-	params *SWAPExactTokensForTokensParams,
-) (common.Hash, error) { // todo. 다른 함수들처럼 result 반환으로 수정 필요?
-	if len(params.Routes) == 0 {
-		return common.Hash{}, errors.New("no routes provided")
-	}
-
-	swapClient, err := b.Client(routerv2)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to get swap client %s: %w", routerv2, err)
-	}
-
-	fromTokenAddress := params.Routes[0].From.Hex()
-	tokenClient, err := b.ClientByAddress(fromTokenAddress)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to get from client for token %s: %w", fromTokenAddress, err)
-	}
-
-	// Get the ERC20 client for the input token (first token in the route)
-	// Step 1: Approve the swap router to spend the input tokens
-
-	approveTxHash, err := b.ensureApproval(tokenClient, *swapClient.ContractAddress(), params.AmountIn)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to approve tokens: %w", err)
-	}
-
-	if approveTxHash != (common.Hash{}) {
-		// Log approval transaction hash (in production, you might want to wait for confirmation)
-		_, err = b.tl.WaitForTransaction(approveTxHash)
-		if err != nil {
-			return common.Hash{}, fmt.Errorf("failed to approve tokens: %w", err)
-		}
-	}
-
-	// Step 2: Execute the swap
-	swapTxHash, err := swapClient.Send(
-		types.Standard,
-		&b.myAddr,
-		b.privateKey,
-		"swapExactTokensForTokens",
-		params.AmountIn,
-		params.AmountOutMin,
-		params.Routes,
-		params.To,
-		params.Deadline,
-	)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to execute swap: %w", err)
-	}
-
-	return swapTxHash, nil
-}
-
-// GetAMMState retrieves the current state of an AMM pool
-// This is a read-only operation that does not create a transaction
-func (b *Blackhole) GetAMMState() (*AMMState, error) {
-	poolClient, err := b.Client(wavaxUsdcPair)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pool client for %s: %w", wavaxUsdcPair, err)
-	}
-
-	// Call safelyGetStateOfAMM - this is a read-only operation
-	result, err := poolClient.Call(nil, "safelyGetStateOfAMM")
-	if err != nil {
-		return nil, fmt.Errorf("failed to call safelyGetStateOfAMM: %w", err)
-	}
-
-	// Validate result length
-	if len(result) != 7 {
-		return nil, fmt.Errorf("unexpected result length: expected 7, got %d", len(result))
-	}
-
-	// Parse results into AMMState struct
-	// The order matches the ABI outputs: sqrtPrice, tick, lastFee, pluginConfig, activeLiquidity, nextTick, previousTick
-	state := &AMMState{
-		SqrtPrice:       result[0].(*big.Int),
-		Tick:            int32(result[1].(*big.Int).Int64()),
-		LastFee:         result[2].(uint16),
-		PluginConfig:    result[3].(uint8),
-		ActiveLiquidity: result[4].(*big.Int),
-		NextTick:        int32(result[5].(*big.Int).Int64()),
-		PreviousTick:    int32(result[6].(*big.Int).Int64()),
-	}
-
-	return state, nil
-}
-
-// no use
-// func (b *Blackhole) GetAmountOut(pairAddress common.Address, amountIn *big.Int, tokenIn common.Address) (*big.Int, error) {
-// 	pairClient, err := b.Client(pairAddress.Hex())
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to get pair client for %s: %w", pairAddress.Hex(), err)
-// 	}
-
-// 	// Call getAmountOut(uint amountIn, address tokenIn) - this is a read-only operation
-// 	result, err := pairClient.Call(nil, "getAmountOut", amountIn, tokenIn)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to call getAmountOut: %w", err)
-// 	}
-
-// 	// Validate result length
-// 	if len(result) != 1 {
-// 		return nil, fmt.Errorf("unexpected result length: expected 1, got %d", len(result))
-// 	}
-
-// 	// Parse the output amount
-// 	amountOut := result[0].(*big.Int)
-// 	return amountOut, nil
-// }
-
-// validateBalances validates wallet has sufficient token balances
-// Returns error if insufficient balance, nil otherwise
-func (b *Blackhole) validateBalances(requiredWAVAX, requiredUSDC *big.Int) error {
-	wavaxClient, err := b.Client(wavax)
-	if err != nil {
-		return fmt.Errorf("failed to get WAVAX client: %w", err)
-	}
-
-	usdcClient, err := b.Client(usdc)
-	if err != nil {
-		return fmt.Errorf("failed to get USDC client: %w", err)
-	}
-
-	// Query WAVAX balance
-	wavaxResult, err := wavaxClient.Call(&b.myAddr, "balanceOf", b.myAddr)
-	if err != nil {
-		return fmt.Errorf("failed to get WAVAX balance: %w", err)
-	}
-	wavaxBalance := wavaxResult[0].(*big.Int)
-
-	// Query USDC balance
-	usdcResult, err := usdcClient.Call(&b.myAddr, "balanceOf", b.myAddr)
-	if err != nil {
-		return fmt.Errorf("failed to get USDC balance: %w", err)
-	}
-	usdcBalance := usdcResult[0].(*big.Int)
-
-	// Validate WAVAX balance
-	if wavaxBalance.Cmp(requiredWAVAX) < 0 {
-		return fmt.Errorf("insufficient WAVAX balance: have %s, need %s",
-			wavaxBalance.String(), requiredWAVAX.String())
-	}
-
-	// Validate USDC balance
-	if usdcBalance.Cmp(requiredUSDC) < 0 {
-		return fmt.Errorf("insufficient USDC balance: have %s, need %s",
-			usdcBalance.String(), requiredUSDC.String())
-	}
-
-	return nil
-}
-
-// ensureApproval ensures token approval exists, optimizing to reuse existing allowances
-// Returns transaction hash (zero if approval not needed), or error
-func (b *Blackhole) ensureApproval(
-	tokenClient ContractClient,
-	spender common.Address,
-	requiredAmount *big.Int,
-) (common.Hash, error) {
-	// Check existing allowance
-	result, err := tokenClient.Call(&b.myAddr, "allowance", b.myAddr, spender)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to check allowance: %w", err)
-	}
-
-	currentAllowance := result[0].(*big.Int)
-
-	// Only approve if insufficient
-	if currentAllowance.Cmp(requiredAmount) >= 0 {
-		// Sufficient allowance already exists
-		return common.Hash{}, nil
-	}
-
-	// Approve required amount
-	txHash, err := tokenClient.Send(
-		types.Standard,
-		&b.myAddr,
-		b.privateKey,
-		"approve",
-		spender,
-		requiredAmount,
-	)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("failed to approve tokens: %w", err)
-	}
-
-	return txHash, nil
-}
 
 // Mint stakes liquidity in WAVAX-USDC pool with automatic position calculation
 // maxWAVAX: Maximum WAVAX amount to stake (wei)
@@ -215,25 +22,25 @@ func (b *Blackhole) Mint(
 	maxUSDC *big.Int,
 	rangeWidth int,
 	slippagePct int,
-) (*StakingResult, error) {
-	tickSpacing := b.tickSpacing()
+) (*types.StakingResult, error) {
+	tickSpacing := b.poolType.TickSpacing()
 
 	// T012: Input validation
 	if err := util.ValidateStakingRequest(maxWAVAX, maxUSDC, rangeWidth, slippagePct); err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("validation failed: %v", err),
 		}, err
 	}
 
 	// Initialize transaction tracking
-	var transactions []TransactionRecord
+	var transactions []types.TransactionRecord
 
 	// T013: Query pool state
 	// wavaxUsdcPairAddr, _ := b.GetAddress(wavaxUsdcPair)
 	state, err := b.GetAMMState()
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to query pool state: %v", err),
 		}, fmt.Errorf("failed to query pool state: %w", err)
@@ -243,7 +50,7 @@ func (b *Blackhole) Mint(
 	log.Printf("CalculateTickBounds: %d,rangeWidth: %d, tickSpacing: %d", state.Tick, rangeWidth, tickSpacing)
 	tickLower, tickUpper, err := util.CalculateTickBounds(state.Tick, rangeWidth, tickSpacing)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to calculate tick bounds: %v", err),
 		}, fmt.Errorf("failed to calculate tick bounds: %w", err)
@@ -288,7 +95,7 @@ func (b *Blackhole) Mint(
 
 	// T016: Validate balances
 	if err := b.validateBalances(amount0Desired, amount1Desired); err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("balance validation failed: %v", err),
 		}, fmt.Errorf("balance validation failed: %w", err)
@@ -299,28 +106,28 @@ func (b *Blackhole) Mint(
 	amount1Min := util.CalculateMinAmount(amount1Desired, slippagePct)
 
 	// Get contract clients
-	wavaxClient, err := b.Client(wavax)
+	wavaxClient, err := b.registry.Client(wavax)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get WAVAX client: %v", err),
 		}, fmt.Errorf("failed to get WAVAX client: %w", err)
 	}
 
-	usdcClient, err := b.Client(usdc)
+	usdcClient, err := b.registry.Client(usdc)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get USDC client: %v", err),
 		}, fmt.Errorf("failed to get USDC client: %w", err)
 	}
 
-	nftManagerAddr, _ := b.GetAddress(nonfungiblePositionManager)
+	nftManagerAddr, _ := b.registry.GetAddress(nonfungiblePositionManager)
 
 	// T018: WAVAX approval
 	wavaxApproveTxHash, err := b.ensureApproval(wavaxClient, nftManagerAddr, amount0Desired)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to approve WAVAX: %v", err),
 		}, fmt.Errorf("failed to approve WAVAX: %w", err)
@@ -330,7 +137,7 @@ func (b *Blackhole) Mint(
 	if wavaxApproveTxHash != (common.Hash{}) {
 		receipt, err := b.tl.WaitForTransaction(wavaxApproveTxHash)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("WAVAX approval transaction failed: %v", err),
 			}, fmt.Errorf("WAVAX approval transaction failed: %w", err)
@@ -339,7 +146,7 @@ func (b *Blackhole) Mint(
 		// T024: Extract gas cost
 		gasCost, err := util.ExtractGasCost(receipt)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
 			}, fmt.Errorf("failed to extract gas cost: %w", err)
@@ -353,7 +160,7 @@ func (b *Blackhole) Mint(
 		gasUsed := new(big.Int)
 		gasUsed.SetString(receipt.GasUsed, 0)
 
-		transactions = append(transactions, TransactionRecord{
+		transactions = append(transactions, types.TransactionRecord{
 			TxHash:    wavaxApproveTxHash,
 			GasUsed:   gasUsed.Uint64(),
 			GasPrice:  gasPrice,
@@ -366,7 +173,7 @@ func (b *Blackhole) Mint(
 	// T019: USDC approval
 	usdcApproveTxHash, err := b.ensureApproval(usdcClient, nftManagerAddr, amount1Desired)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to approve USDC: %v", err),
 		}, fmt.Errorf("failed to approve USDC: %w", err)
@@ -376,7 +183,7 @@ func (b *Blackhole) Mint(
 	if usdcApproveTxHash != (common.Hash{}) {
 		receipt, err := b.tl.WaitForTransaction(usdcApproveTxHash)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("USDC approval transaction failed: %v", err),
 			}, fmt.Errorf("USDC approval transaction failed: %w", err)
@@ -385,7 +192,7 @@ func (b *Blackhole) Mint(
 		// Extract gas cost
 		gasCost, err := util.ExtractGasCost(receipt)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
 			}, fmt.Errorf("failed to extract gas cost: %w", err)
@@ -399,7 +206,7 @@ func (b *Blackhole) Mint(
 		gasUsed := new(big.Int)
 		gasUsed.SetString(receipt.GasUsed, 0)
 
-		transactions = append(transactions, TransactionRecord{
+		transactions = append(transactions, types.TransactionRecord{
 			TxHash:    usdcApproveTxHash,
 			GasUsed:   gasUsed.Uint64(),
 			GasPrice:  gasPrice,
@@ -411,10 +218,10 @@ func (b *Blackhole) Mint(
 
 	// T020: Construct MintParams
 	deadline := big.NewInt(time.Now().Add(20 * time.Minute).Unix())
-	wavaxAddr, _ := b.GetAddress(wavax)
-	usdcAddr, _ := b.GetAddress(usdc)
-	deployerAddr, _ := b.GetAddress(deployer)
-	mintParams := &MintParams{
+	wavaxAddr, _ := b.registry.GetAddress(wavax)
+	usdcAddr, _ := b.registry.GetAddress(usdc)
+	deployerAddr, _ := b.registry.GetAddress(deployer)
+	mintParams := &types.MintParams{
 		Token0:         wavaxAddr,
 		Token1:         usdcAddr,
 		Deployer:       deployerAddr,
@@ -429,9 +236,9 @@ func (b *Blackhole) Mint(
 	}
 
 	// T021: Get NonfungiblePositionManager client
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	nftManagerClient, err := b.registry.Client(nonfungiblePositionManager)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
 		}, fmt.Errorf("failed to get NFT manager client: %w", err)
@@ -446,7 +253,7 @@ func (b *Blackhole) Mint(
 		mintParams,
 	)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to submit mint transaction: %v", err),
 		}, fmt.Errorf("failed to submit mint transaction: %w", err)
@@ -455,7 +262,7 @@ func (b *Blackhole) Mint(
 	// T023: Wait for mint confirmation
 	mintReceipt, err := b.tl.WaitForTransaction(mintTxHash)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("mint transaction failed: %v", err),
 		}, fmt.Errorf("mint transaction failed: %w", err)
@@ -464,7 +271,7 @@ func (b *Blackhole) Mint(
 	// Extract gas cost for mint
 	mintGasCost, err := util.ExtractGasCost(mintReceipt)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to extract mint gas cost: %v", err),
 		}, fmt.Errorf("failed to extract mint gas cost: %w", err)
@@ -478,7 +285,7 @@ func (b *Blackhole) Mint(
 	mintGasUsed := new(big.Int)
 	mintGasUsed.SetString(mintReceipt.GasUsed, 0)
 
-	transactions = append(transactions, TransactionRecord{
+	transactions = append(transactions, types.TransactionRecord{
 		TxHash:    mintTxHash,
 		GasUsed:   mintGasUsed.Uint64(),
 		GasPrice:  mintGasPrice,
@@ -498,7 +305,7 @@ func (b *Blackhole) Mint(
 		totalGasCost.Add(totalGasCost, tx.GasCost)
 	}
 
-	result := &StakingResult{
+	result := &types.StakingResult{
 		NFTTokenID:     nftTokenID,
 		ActualAmount0:  amount0Desired, // Actual amounts would be in mint receipt
 		ActualAmount1:  amount1Desired,
@@ -530,22 +337,22 @@ func (b *Blackhole) Mint(
 // Returns StakingResult with transaction tracking and gas costs
 func (b *Blackhole) Stake(
 	nftTokenID *big.Int,
-) (*StakingResult, error) {
+) (*types.StakingResult, error) {
 	// T007-T008: Input validation
 	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
-		return &StakingResult{
+		return &types.StakingResult{
 			Success:      false,
 			ErrorMessage: "validation failed: invalid token ID",
 		}, fmt.Errorf("validation failed: invalid token ID")
 	}
 
 	// T009: Initialize transaction tracking
-	var transactions []TransactionRecord
+	var transactions []types.TransactionRecord
 
 	// T011-T014: NFT Ownership Verification
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	nftManagerClient, err := b.registry.Client(nonfungiblePositionManager)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
@@ -555,7 +362,7 @@ func (b *Blackhole) Stake(
 	// Query NFT ownership
 	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to verify NFT %d ownership: %v", nftTokenID, err),
@@ -564,7 +371,7 @@ func (b *Blackhole) Stake(
 
 	owner := ownerResult[0].(common.Address)
 	if owner != b.myAddr {
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
@@ -574,7 +381,7 @@ func (b *Blackhole) Stake(
 	// T015-T023: NFT Approval Check and Execution
 	approvalResult, err := nftManagerClient.Call(&b.myAddr, "getApproved", nftTokenID)
 	if err != nil {
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to check NFT %d approval: %v", nftTokenID, err),
@@ -584,7 +391,7 @@ func (b *Blackhole) Stake(
 	currentApproval := approvalResult[0].(common.Address)
 
 	// Only approve if not already approved for this gauge
-	gaugeAddr, _ := b.GetAddress(gauge)
+	gaugeAddr, _ := b.registry.GetAddress(gauge)
 	if currentApproval != gaugeAddr {
 		log.Printf("Approving NFT %s for gauge %s", nftTokenID.String(), gaugeAddr.Hex())
 
@@ -597,7 +404,7 @@ func (b *Blackhole) Stake(
 			nftTokenID,
 		)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				NFTTokenID:   nftTokenID,
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("failed to approve NFT: %v", err),
@@ -607,7 +414,7 @@ func (b *Blackhole) Stake(
 		// Wait for approval confirmation
 		approvalReceipt, err := b.tl.WaitForTransaction(approveTxHash)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				NFTTokenID:   nftTokenID,
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("NFT approval transaction failed: %v", err),
@@ -617,7 +424,7 @@ func (b *Blackhole) Stake(
 		// Track approval transaction
 		gasCost, err := util.ExtractGasCost(approvalReceipt)
 		if err != nil {
-			return &StakingResult{
+			return &types.StakingResult{
 				NFTTokenID:   nftTokenID,
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("failed to extract approval gas cost: %v", err),
@@ -629,7 +436,7 @@ func (b *Blackhole) Stake(
 		gasUsed := new(big.Int)
 		gasUsed.SetString(approvalReceipt.GasUsed, 0)
 
-		transactions = append(transactions, TransactionRecord{
+		transactions = append(transactions, types.TransactionRecord{
 			TxHash:    approveTxHash,
 			GasUsed:   gasUsed.Uint64(),
 			GasPrice:  gasPrice,
@@ -642,14 +449,14 @@ func (b *Blackhole) Stake(
 	}
 
 	// T024-T030: Gauge Deposit Execution
-	gaugeClient, err := b.Client(gauge)
+	gaugeClient, err := b.registry.Client(gauge)
 	if err != nil {
 		// Return with partial transaction records if approval was sent
 		totalGasCost := big.NewInt(0)
 		for _, tx := range transactions {
 			totalGasCost.Add(totalGasCost, tx.GasCost)
 		}
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Transactions: transactions,
 			TotalGasCost: totalGasCost,
@@ -673,7 +480,7 @@ func (b *Blackhole) Stake(
 		for _, tx := range transactions {
 			totalGasCost.Add(totalGasCost, tx.GasCost)
 		}
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Transactions: transactions,
 			TotalGasCost: totalGasCost,
@@ -689,7 +496,7 @@ func (b *Blackhole) Stake(
 		for _, tx := range transactions {
 			totalGasCost.Add(totalGasCost, tx.GasCost)
 		}
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Transactions: transactions,
 			TotalGasCost: totalGasCost,
@@ -705,7 +512,7 @@ func (b *Blackhole) Stake(
 		for _, tx := range transactions {
 			totalGasCost.Add(totalGasCost, tx.GasCost)
 		}
-		return &StakingResult{
+		return &types.StakingResult{
 			NFTTokenID:   nftTokenID,
 			Transactions: transactions,
 			TotalGasCost: totalGasCost,
@@ -719,7 +526,7 @@ func (b *Blackhole) Stake(
 	gasUsed := new(big.Int)
 	gasUsed.SetString(depositReceipt.GasUsed, 0)
 
-	transactions = append(transactions, TransactionRecord{
+	transactions = append(transactions, types.TransactionRecord{
 		TxHash:    depositTxHash,
 		GasUsed:   gasUsed.Uint64(),
 		GasPrice:  gasPrice,
@@ -734,7 +541,7 @@ func (b *Blackhole) Stake(
 		totalGasCost.Add(totalGasCost, tx.GasCost)
 	}
 
-	result := &StakingResult{
+	result := &types.StakingResult{
 		NFTTokenID:     nftTokenID,
 		ActualAmount0:  big.NewInt(0), // Not populated by Stake
 		ActualAmount1:  big.NewInt(0), // Not populated by Stake
@@ -758,95 +565,39 @@ func (b *Blackhole) Stake(
 	return result, nil
 }
 
-// Unstake withdraws a staked NFT position from FarmingCenter
-// nftTokenID: ERC721 token ID from previous Mint operation
-// incentiveKey: Identifies the farming program to exit
-// collectRewards: Whether to claim accumulated rewards during unstake
-// Returns UnstakeResult with transaction tracking and gas costs
+// executeUnstake calls the existing Unstake method with correct nonce (T025)
+func (b *Blackhole) executeUnstake(
+	nftTokenID *big.Int,
+	nonce *big.Int,
+	state *types.StrategyState,
+	reportChan chan<- string,
+) (*types.UnstakeResult, error) {
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp:  time.Now(),
+		EventType:  "rebalance_start",
+		Message:    fmt.Sprintf("Unstaking NFT %s", nftTokenID.String()),
+		Phase:      &state.CurrentState,
+		NFTTokenID: nftTokenID,
+	})
 
-func (b *Blackhole) TokenOfOwnerByIndex(index *big.Int) (*big.Int, error) {
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	result, err := b.Unstake(nftTokenID, nonce)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get NFT manager client: %w", err)
-	}
-	rtnRaw, err := nftManagerClient.Call(nil, "tokenOfOwnerByIndex", b.myAddr, index)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call tokenOfOwnerByIndex: %w", err)
+		return nil, fmt.Errorf("unstake failed: %w", err)
 	}
 
-	return rtnRaw[0].(*big.Int), nil
-}
+	// Update cumulative gas
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, result.TotalGasCost)
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Unstake transaction completed",
+		GasCost:       result.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Profit:        result.Rewards.Reward,
+		Phase:         &state.CurrentState,
+	})
 
-// GetUserPositions retrieves all NFT position token IDs owned by the user
-// Returns a slice of token IDs and an error if the operation fails
-func (b *Blackhole) GetUserPositions() ([]*big.Int, error) {
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get NFT manager client: %w", err)
-	}
-
-	// Get the balance of NFTs owned by the user
-	balanceResult, err := nftManagerClient.Call(nil, "balanceOf", b.myAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get NFT balance: %w", err)
-	}
-
-	balance := balanceResult[0].(*big.Int)
-	if balance.Sign() == 0 {
-		return []*big.Int{}, nil // No positions owned
-	}
-
-	// Iterate through all token IDs
-	tokenIDs := make([]*big.Int, 0, balance.Int64())
-	for i := int64(0); i < balance.Int64(); i++ {
-		tokenID, err := b.TokenOfOwnerByIndex(big.NewInt(i))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get token ID at index %d: %w", i, err)
-		}
-		tokenIDs = append(tokenIDs, tokenID)
-	}
-
-	return tokenIDs, nil
-}
-
-// GetPositionDetails retrieves the detailed information for a specific position NFT
-// Returns a Position struct containing all position data
-func (b *Blackhole) GetPositionDetails(tokenID *big.Int) (*Position, error) {
-	if tokenID == nil || tokenID.Sign() <= 0 {
-		return nil, fmt.Errorf("invalid token ID: must be positive")
-	}
-
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get NFT manager client: %w", err)
-	}
-
-	// Call positions(tokenId) function
-	positionResult, err := nftManagerClient.Call(nil, "positions", tokenID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get position details for token ID %s: %w", tokenID.String(), err)
-	}
-
-	// Parse the returned values according to the ABI
-	// positions() returns: (nonce, operator, token0, token1, deployer, tickLower, tickUpper,
-	//                       liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128,
-	//                       tokensOwed0, tokensOwed1)
-	position := &Position{
-		Nonce:                    positionResult[0].(*big.Int),
-		Operator:                 positionResult[1].(common.Address),
-		Token0:                   positionResult[2].(common.Address),
-		Token1:                   positionResult[3].(common.Address),
-		Deployer:                 positionResult[4].(common.Address),
-		TickLower:                int32(positionResult[5].(*big.Int).Int64()),
-		TickUpper:                int32(positionResult[6].(*big.Int).Int64()),
-		Liquidity:                positionResult[7].(*big.Int),
-		FeeGrowthInside0LastX128: positionResult[8].(*big.Int),
-		FeeGrowthInside1LastX128: positionResult[9].(*big.Int),
-		TokensOwed0:              positionResult[10].(*big.Int),
-		TokensOwed1:              positionResult[11].(*big.Int),
-	}
-
-	return position, nil
+	return result, nil
 }
 
 /*
@@ -857,22 +608,22 @@ IncentiveKey에 대응되는 nonce 값을 사용해야만 함. 내 경우에는 
 func (b *Blackhole) Unstake(
 	nftTokenID *big.Int,
 	nonce *big.Int,
-) (*UnstakeResult, error) {
+) (*types.UnstakeResult, error) {
 	// T006: Input validation - NFT token ID
 	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			Success:      false,
 			ErrorMessage: "validation failed: invalid token ID",
 		}, fmt.Errorf("validation failed: invalid token ID")
 	}
 
 	// Initialize transaction tracking
-	var transactions []TransactionRecord
+	var transactions []types.TransactionRecord
 
 	// T008: Verify NFT ownership
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	nftManagerClient, err := b.registry.Client(nonfungiblePositionManager)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
@@ -881,7 +632,7 @@ func (b *Blackhole) Unstake(
 
 	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to verify NFT ownership: %v", err),
@@ -890,7 +641,7 @@ func (b *Blackhole) Unstake(
 
 	owner := ownerResult[0].(common.Address)
 	if owner != b.myAddr {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
@@ -898,9 +649,9 @@ func (b *Blackhole) Unstake(
 	}
 
 	// T009: Verify NFT is currently farmed
-	farmingCenterClient, err := b.Client(farmingCenter)
+	farmingCenterClient, err := b.registry.Client(farmingCenter)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get FarmingCenter client: %v", err),
@@ -909,7 +660,7 @@ func (b *Blackhole) Unstake(
 
 	depositsResult, err := farmingCenterClient.Call(&b.myAddr, "deposits", nftTokenID)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to check farming status: %v", err),
@@ -918,7 +669,7 @@ func (b *Blackhole) Unstake(
 
 	currentIncentiveId := depositsResult[0].([32]byte)
 	if currentIncentiveId == [32]byte{} {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: "NFT is not currently staked in farming",
@@ -928,9 +679,9 @@ func (b *Blackhole) Unstake(
 	// T010: Build multicall data - encode exitFarming call
 	var multicallData [][]byte
 
-	blackAddr, _ := b.GetAddress(black)
-	algebraPoolAddr, _ := b.GetAddress(wavaxUsdcPair)
-	incentiveKey := IncentiveKey{
+	blackAddr, _ := b.registry.GetAddress(black)
+	algebraPoolAddr, _ := b.registry.GetAddress(wavaxUsdcPair)
+	incentiveKey := types.IncentiveKey{
 		RewardToken:      blackAddr,
 		BonusRewardToken: blackAddr,
 		Pool:             algebraPoolAddr,
@@ -940,7 +691,7 @@ func (b *Blackhole) Unstake(
 	farmingCenterABI := farmingCenterClient.Abi()
 	exitFarmingData, err := farmingCenterABI.Pack("exitFarming", incentiveKey, nftTokenID)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to encode exitFarming: %v", err),
@@ -951,7 +702,7 @@ func (b *Blackhole) Unstake(
 	// T011: Conditionally encode collectRewards call
 	collectRewardsData, err := farmingCenterABI.Pack("claimReward", blackAddr, b.myAddr, big.NewInt(0)) // todo. reward 0원인거 확인.
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to encode collectRewards: %v", err),
@@ -960,7 +711,7 @@ func (b *Blackhole) Unstake(
 	multicallData = append(multicallData, collectRewardsData)
 
 	// T012: Execute multicall transaction
-	farmingCenterAddr, _ := b.GetAddress(farmingCenter)
+	farmingCenterAddr, _ := b.registry.GetAddress(farmingCenter)
 	log.Printf("Unstaking NFT %s from FarmingCenter %s", nftTokenID.String(), farmingCenterAddr.Hex())
 
 	multicallTxHash, err := farmingCenterClient.Send(
@@ -971,7 +722,7 @@ func (b *Blackhole) Unstake(
 		multicallData,
 	)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to submit multicall transaction: %v", err),
@@ -981,7 +732,7 @@ func (b *Blackhole) Unstake(
 	// T013: Wait for transaction confirmation and extract gas cost
 	multicallReceipt, err := b.tl.WaitForTransaction(multicallTxHash)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("multicall transaction failed: %v", err),
@@ -990,7 +741,7 @@ func (b *Blackhole) Unstake(
 
 	gasCost, err := util.ExtractGasCost(multicallReceipt)
 	if err != nil {
-		return &UnstakeResult{
+		return &types.UnstakeResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
@@ -1002,7 +753,7 @@ func (b *Blackhole) Unstake(
 	gasUsed := new(big.Int)
 	gasUsed.SetString(multicallReceipt.GasUsed, 0)
 
-	transactions = append(transactions, TransactionRecord{
+	transactions = append(transactions, types.TransactionRecord{
 		TxHash:    multicallTxHash,
 		GasUsed:   gasUsed.Uint64(),
 		GasPrice:  gasPrice,
@@ -1014,7 +765,7 @@ func (b *Blackhole) Unstake(
 	// T014: Parse reward amounts from multicall results (if collected)
 	// Note: Reward parsing from multicall results would require decoding the return data
 	// For now, we set rewards to default values - this should be enhanced with actual parsing
-	rewards := &RewardAmounts{
+	rewards := &types.RewardAmounts{
 		Reward:           big.NewInt(0),
 		BonusReward:      big.NewInt(0),
 		RewardToken:      incentiveKey.RewardToken,
@@ -1029,7 +780,7 @@ func (b *Blackhole) Unstake(
 		totalGasCost.Add(totalGasCost, tx.GasCost)
 	}
 
-	result := &UnstakeResult{
+	result := &types.UnstakeResult{
 		NFTTokenID:   nftTokenID,
 		Rewards:      rewards,
 		Transactions: transactions,
@@ -1053,22 +804,55 @@ func (b *Blackhole) Unstake(
 	return result, nil
 }
 
+// executeWithdraw calls the existing Withdraw method and tracks results (T026)
+func (b *Blackhole) executeWithdraw(
+	nftTokenID *big.Int,
+	state *types.StrategyState,
+	reportChan chan<- string,
+) (*types.WithdrawResult, error) {
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp:  time.Now(),
+		EventType:  "rebalance_start",
+		Message:    fmt.Sprintf("Withdrawing liquidity from NFT %s", nftTokenID.String()),
+		Phase:      &state.CurrentState,
+		NFTTokenID: nftTokenID,
+	})
+
+	result, err := b.Withdraw(nftTokenID)
+	if err != nil {
+		return nil, fmt.Errorf("withdraw failed: %w", err)
+	}
+
+	// Update cumulative gas
+	state.CumulativeGas = new(big.Int).Add(state.CumulativeGas, result.TotalGasCost)
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "gas_cost",
+		Message:       "Withdraw transaction completed",
+		GasCost:       result.TotalGasCost,
+		CumulativeGas: state.CumulativeGas,
+		Phase:         &state.CurrentState,
+	})
+
+	return result, nil
+}
+
 // Withdraw removes all liquidity from an NFT position and burns the NFT
 // nftTokenID: ERC721 token ID from previous Mint operation
 // Returns WithdrawResult with transaction tracking and gas costs
-func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
+func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*types.WithdrawResult, error) {
 	// T008: Input validation
 	if nftTokenID == nil || nftTokenID.Sign() <= 0 {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			Success:      false,
 			ErrorMessage: "validation failed: NFT token ID must be positive",
 		}, fmt.Errorf("validation failed: NFT token ID must be positive")
 	}
 
 	// T009: Get nonfungiblePositionManager ContractClient
-	nftManagerClient, err := b.Client(nonfungiblePositionManager)
+	nftManagerClient, err := b.registry.Client(nonfungiblePositionManager)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to get NFT manager client: %v", err),
@@ -1078,7 +862,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	// T010: Verify NFT ownership
 	ownerResult, err := nftManagerClient.Call(&b.myAddr, "ownerOf", nftTokenID)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to verify NFT ownership: %v", err),
@@ -1087,7 +871,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 
 	owner := ownerResult[0].(common.Address)
 	if owner != b.myAddr {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("NFT not owned by wallet: owned by %s", owner.Hex()),
@@ -1097,7 +881,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	// T011: Query position details to get liquidity amount
 	positionsResult, err := nftManagerClient.Call(&b.myAddr, "positions", nftTokenID)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to query position: %v", err),
@@ -1123,7 +907,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	amount1Min := big.NewInt(0)
 
 	// T012-T013: Encode decreaseLiquidity
-	decreaseParams := &DecreaseLiquidityParams{
+	decreaseParams := &types.DecreaseLiquidityParams{
 		TokenId:    nftTokenID,
 		Liquidity:  liquidity,
 		Amount0Min: amount0Min,
@@ -1134,7 +918,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	nftManagerABI := nftManagerClient.Abi()
 	decreaseData, err := nftManagerABI.Pack("decreaseLiquidity", decreaseParams)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to encode decreaseLiquidity: %v", err),
@@ -1144,7 +928,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 
 	// T014-T015: Encode collect
 	maxUint128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
-	collectParams := &CollectParams{
+	collectParams := &types.CollectParams{
 		TokenId:    nftTokenID,
 		Recipient:  b.myAddr,
 		Amount0Max: maxUint128,
@@ -1153,7 +937,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 
 	collectData, err := nftManagerABI.Pack("collect", collectParams)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to encode collect: %v", err),
@@ -1164,7 +948,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	// T016: Encode burn
 	burnData, err := nftManagerABI.Pack("burn", nftTokenID)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to encode burn: %v", err),
@@ -1181,7 +965,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 		multicallData,
 	)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to submit multicall transaction: %v", err),
@@ -1191,7 +975,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	// T018: Wait for transaction confirmation
 	receipt, err := b.tl.WaitForTransaction(txHash)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("multicall transaction failed: %v", err),
@@ -1201,7 +985,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	// T019: Extract gas cost from receipt
 	gasCost, err := util.ExtractGasCost(receipt)
 	if err != nil {
-		return &WithdrawResult{
+		return &types.WithdrawResult{
 			NFTTokenID:   nftTokenID,
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to extract gas cost: %v", err),
@@ -1214,8 +998,8 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	gasUsed.SetString(receipt.GasUsed, 0)
 
 	// T020: Create TransactionRecord
-	var transactions []TransactionRecord
-	transactions = append(transactions, TransactionRecord{
+	var transactions []types.TransactionRecord
+	transactions = append(transactions, types.TransactionRecord{
 		TxHash:    txHash,
 		GasUsed:   gasUsed.Uint64(),
 		GasPrice:  gasPrice,
@@ -1225,7 +1009,7 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	})
 
 	// T021: Build and return WithdrawResult
-	result := &WithdrawResult{
+	result := &types.WithdrawResult{
 		NFTTokenID:   nftTokenID,
 		Amount0:      big.NewInt(0), // Will be enhanced in Polish phase to parse from multicall results
 		Amount1:      big.NewInt(0), // Will be enhanced in Polish phase to parse from multicall results
@@ -1243,47 +1027,109 @@ func (b *Blackhole) Withdraw(nftTokenID *big.Int) (*WithdrawResult, error) {
 	return result, nil
 }
 
-/**************************************************Internal Util********************************************************************************************/
+// executeRebalancing orchestrates the full rebalancing workflow (T027-T034)
+// Steps: unstake → withdraw → calculate rebalance → swap → update state
+// Does NOT create new position - that happens after stability check
+// Supports checkpoint/resume: resumes from state.CurrentStep if retrying after failure
+func (b *Blackhole) executeRebalancing(
+	config *types.StrategyConfig,
+	state *types.StrategyState,
+	nonce *big.Int,
+	reportChan chan<- string,
+) (*types.RebalanceWorkflow, error) {
 
-func MintNftTokenId(nftManagerClient ContractClient, mintReceipt *types.TxReceipt) *big.Int {
-	nftTokenID := big.NewInt(0) // Default fallback
-	// Parse receipt to extract events
-	eventsJson, err := nftManagerClient.ParseReceipt(mintReceipt)
-	if err != nil {
-		log.Printf("Warning: Failed to parse mint receipt for token ID: %v", err)
-	} else {
-		// Parse the JSON to find Transfer event
-		var events []map[string]interface{}
-		if err := json.Unmarshal([]byte(eventsJson), &events); err == nil {
-			for _, event := range events {
-				if eventName, ok := event["event"].(string); ok && eventName == "Transfer" {
-					if params, ok := event["parameter"].(map[string]interface{}); ok {
-						// Check if this is a mint (from zero address to recipient)
-						if fromAddr, ok := params["from"].(string); ok {
-							zeroAddr := common.Address{}
-							if fromAddr == "0x0000000000000000000000000000000000000000" || fromAddr == zeroAddr.Hex() {
-								// Extract tokenId from the Transfer event
-								if tokenIdVal, ok := params["tokenId"]; ok {
-									switch v := tokenIdVal.(type) {
-									case *big.Int:
-										nftTokenID = v
-									case float64:
-										nftTokenID = big.NewInt(int64(v))
-									case string:
-										if tokenIdBig, ok := new(big.Int).SetString(v, 10); ok {
-											nftTokenID = tokenIdBig
-										}
-									}
-									log.Printf("Extracted NFT token ID from mint receipt: %s", nftTokenID.String())
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+	// T028: Create RebalanceWorkflow for tracking
+	workflow := &types.RebalanceWorkflow{
+		StartTime:    time.Now(),
+		OldPosition:  nil, // Will be populated if we query position details
+		SwapResults:  []types.TransactionRecord{},
+		TotalGas:     big.NewInt(0),
+		Success:      false,
+		ErrorMessage: "",
 	}
 
-	return nftTokenID
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp: time.Now(),
+		EventType: "rebalance_start",
+		Message:   fmt.Sprintf("Starting rebalancing workflow from step: %s", state.CurrentStep.String()),
+		Phase:     &state.CurrentState,
+	})
+
+	if state.NFTTokenID == nil {
+		nftId, err := b.TokenOfOwnerByIndex(big.NewInt(0))
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = err.Error()
+			return workflow, err
+		}
+		state.NFTTokenID = nftId
+	}
+
+	// Step: Execute unstake (skip if already completed)
+	if state.CurrentStep < types.Step_Rebalance_UnstakeCompleted {
+		unstakeResult, err := b.executeUnstake(state.NFTTokenID, nonce, state, reportChan)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = err.Error()
+			return workflow, err
+		}
+
+		// T030: Track cumulative gas
+		workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, unstakeResult.TotalGasCost)
+
+		// T031: Track cumulative rewards
+		if unstakeResult.Rewards != nil {
+			state.CumulativeRewards = new(big.Int).Add(state.CumulativeRewards, unstakeResult.Rewards.Reward)
+		}
+
+		// Checkpoint: unstake completed
+		state.CurrentStep = types.Step_Rebalance_UnstakeCompleted
+		log.Printf("[Checkpoint] Unstake completed: NFT ID=%s, gas=%s", state.NFTTokenID.String(), unstakeResult.TotalGasCost.String())
+	} else {
+		log.Printf("[Resume] Unstake already completed, NFT ID=%s", state.NFTTokenID.String())
+	}
+
+	// Step: Execute withdraw (skip if already completed)
+	if state.CurrentStep < types.Step_Rebalance_WithdrawCompleted {
+		withdrawResult, err := b.executeWithdraw(state.NFTTokenID, state, reportChan)
+		if err != nil {
+			workflow.Success = false
+			workflow.ErrorMessage = err.Error()
+			return workflow, err
+		}
+
+		workflow.WithdrawResult = withdrawResult
+		// T030: Track cumulative gas
+		workflow.TotalGas = new(big.Int).Add(workflow.TotalGas, withdrawResult.TotalGasCost)
+
+		// Checkpoint: withdraw completed
+		state.CurrentStep = types.Step_Rebalance_WithdrawCompleted
+		log.Printf("[Checkpoint] Withdraw completed: NFT ID=%s, amount0=%s, amount1=%s, gas=%s",
+			state.NFTTokenID.String(), withdrawResult.Amount0.String(), withdrawResult.Amount1.String(), withdrawResult.TotalGasCost.String())
+	} else {
+		log.Printf("[Resume] Withdraw already completed, NFT ID=%s", state.NFTTokenID.String())
+	}
+
+	// T032, T033: Calculate and report net P&L
+	netPnL := new(big.Int).Sub(state.CumulativeRewards, state.CumulativeGas)
+	netPnL = new(big.Int).Sub(netPnL, state.TotalSwapFees)
+
+	sendReport(reportChan, types.StrategyReport{
+		Timestamp:     time.Now(),
+		EventType:     "profit",
+		Message:       "Rebalancing workflow completed (unstake + withdrawal)",
+		CumulativeGas: state.CumulativeGas,
+		Profit:        state.CumulativeRewards,
+		NetPnL:        netPnL,
+		Phase:         &state.CurrentState,
+	})
+
+	workflow.Duration = time.Since(workflow.StartTime)
+	workflow.Success = true
+
+	// Reset step counter for next phase
+	state.CurrentStep = types.Step_None
+	log.Printf("[Phase Complete] RebalancingRequired phase completed, resetting step to None")
+
+	return workflow, nil
 }

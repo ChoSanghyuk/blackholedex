@@ -1,7 +1,7 @@
 package db
 
 import (
-	blackholedex "blackholego"
+	"blackholego/pkg/types"
 	"math/big"
 	"testing"
 	"time"
@@ -38,9 +38,9 @@ func TestMySQLRecorder_RecordReport(t *testing.T) {
 	recorder := &MySQLRecorder{db: gormDB}
 
 	// Create test snapshot
-	snapshot := blackholedex.CurrentAssetSnapshot{
+	snapshot := types.CurrentAssetSnapshot{
 		Timestamp:    time.Now(),
-		CurrentState: blackholedex.ActiveMonitoring,
+		CurrentState: types.ActiveMonitoring,
 		TotalValue:   big.NewInt(1000000),
 		AmountWavax:  big.NewInt(500000),
 		AmountUsdc:   big.NewInt(300000),

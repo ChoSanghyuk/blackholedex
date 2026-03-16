@@ -2,6 +2,7 @@ package configs
 
 import (
 	blackholedex "blackholego"
+	"blackholego/pkg/types"
 	"fmt"
 	"os"
 	"time"
@@ -85,14 +86,14 @@ func (c *Config) ToBlackholeConfigs(pk string) *blackholedex.BlackholeConfig {
 		})
 	}
 
-	var pool blackholedex.PoolType
+	var pool types.PoolType
 	switch c.ActivePool {
 	case "cl1":
-		pool = blackholedex.CL1
+		pool = types.CL1
 	case "cl200":
-		pool = blackholedex.CL200
+		pool = types.CL200
 	default:
-		pool = blackholedex.CL200 // default to CL200 if unknown
+		pool = types.CL200 // default to CL200 if unknown
 	}
 
 	return blackholedex.NewBlackholeConfig(
@@ -104,8 +105,8 @@ func (c *Config) ToBlackholeConfigs(pk string) *blackholedex.BlackholeConfig {
 	)
 }
 
-func (c *Config) ToStrategyConfig() *blackholedex.StrategyConfig {
-	return &blackholedex.StrategyConfig{
+func (c *Config) ToStrategyConfig() *types.StrategyConfig {
+	return &types.StrategyConfig{
 		MonitoringInterval:      time.Duration(c.StrategyYAMLData.MonitoringInterval) * time.Second,
 		StabilityThreshold:      c.StrategyYAMLData.StabilityThreshold,
 		StabilityIntervals:      c.StrategyYAMLData.StabilityIntervals,

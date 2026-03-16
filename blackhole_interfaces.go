@@ -69,5 +69,5 @@ type TxListener interface {
 // TransactionRecorder defines methods for recording strategy reports and transaction results
 type TransactionRecorder interface {
 	// RecordReport saves a strategy report to storage
-	RecordReport(snapshot CurrentAssetSnapshot) error
+	RecordReport(snapshot types.CurrentAssetSnapshot) error
 }

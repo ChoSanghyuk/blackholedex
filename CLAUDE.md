@@ -11,18 +11,61 @@
 
 ```
 blackhole_dex/
-├── blackholedex-contracts/     # Solidity smart contracts (reference)
-│   └── contracts/              # All DEX contracts (Pair, Router, VotingEscrow, Gauge, etc.)
-│   └── artifacts/              # contracts build files (Generated ABIs)
-├── internal/             			
-│   └── util/         					# Generic contract client (ABI pack/unpack, tx send)
-├── pkg/             						
-│   └── contractclient/         # Generic contract client (ABI pack/unpack, tx send)
-├── cmd/                        # CLI entry point
-└── specs/                      # Development specifications
-blackhole.go 	          				# High-level BlackholeDEX-specific operations
-blackhole_interfaces.go 	      # Interfaces blockhole structure would use
-types.go 	          						# Parameter types used in blackhole.go
+├── cmd/                                    # CLI entry point
+│   └── main.go                            # Application entry: main(), config loading, strategy execution
+│
+├── pkg/
+│   ├── contractclient/                    # Generic EVM contract interaction layer
+│   │   ├── contractclient.go             # Call(), Send(), SendWithValue(), GetReceipt(), ParseReceipt(),
+│   │   │                                  # DecodeTransaction(), DecodeByHash()
+│   │   └── contractclient_test.go        # Contract client tests
+│   │
+│   ├── types/                             # Type definitions & enums
+│   │   ├── contract_params.go            # MintParams, StakeParams, UnstakeParams, WithdrawParams
+│   │   ├── enums.go                       # PoolType, StrategyPhase, StrategyStep
+│   │   ├── operation_results.go          # MintResult, StakeResult, UnstakeResult, WithdrawResult
+│   │   ├── pool_types.go                 # PoolType methods: PoolNonce(), TickSpacing()
+│   │   ├── strategy_types.go             # StrategyConfig, StrategyReport, PositionRange, StabilityWindow,
+│   │   │                                  # CircuitBreaker, AMMState, Position, CurrentAssetSnapshot
+│   │   ├── transaction.go                # TxReceipt, DecodedTransaction, Priority
+│   │   └── priority.go                   # Gas priority definitions
+│   │
+│   └── util/                              # Utility functions
+│       ├── abi_loader.go                 # LoadABIFromHardhatArtifact(), LoadABI(), GetContractInfo()
+│       ├── amm.go                         # TickToSqrtPriceX96(), ComputeAmounts(), CalculateTokenAmountsFromLiquidity()
+│       ├── calculations.go               # SqrtPriceToPrice(), CalculateRebalanceAmounts()
+│       ├── validation.go                 # ValidateStakingRequest(), CalculateTickBounds(), CalculateMinAmount(),
+│       │                                  # ExtractGasCost(), IsCriticalError()
+│       ├── crypt.go                       # Encrypt(), Decrypt()
+│       └── hex.go                         # Hex2Bytes()
+│
+├── internal/
+│   └── db/                                # Database persistence layer
+│       ├── transaction_recorder.go       # NewMySQLRecorder(), RecordReport(), GetLatestSnapshot(),
+│       │                                  # GetSnapshotsByTimeRange(), GetSnapshotsByPhase()
+│       └── transaction_recorder_test.go  # DB tests
+│
+├── configs/
+│   └── config.go                          # LoadConfig(), ToBlackholeConfigs(), ToStrategyConfig()
+│
+├── Root-level core files:
+│   ├── blackhole.go                      # Main Blackhole struct: NewBlackhole(), RunAutoPositionStrategy()
+│   ├── blackhole_interfaces.go           # Interfaces: ContractClient, TxListener, TransactionRecorder
+│   ├── position.go                        # Position operations: Mint(), Stake(), Unstake(), Withdraw()
+│   ├── query.go                           # Query operations: GetAMMState(), GetPositionDetails(), GetUserPositions(),
+│   │                                      # TokenOfOwnerByIndex(), validateBalances()
+│   ├── token.go                           # Token operations: Swap(), ensureApproval()
+│   ├── portfolio.go                       # Portfolio tracking & alarming: RecordCurrentAssetSnapshot(), GetCurrentAssetSnapshot(), sendReport()
+│   └── contract_registry.go              # Contract registry: NewContractRegistry(), Client(), ClientByAddress()
+│
+├── blackholedex-contracts/               # Solidity smart contracts (reference)
+│   ├── contracts/                        # DEX contracts (Pair, Router, VotingEscrow, Gauge, etc.)
+│   └── artifacts/                        # Generated ABIs from Hardhat compilation
+│
+└── specs/                                # Development specifications & strategy implementations
+    └── 001-liquidity-repositioning/
+        └── contracts/
+            └── strategy_api.go           # Legacy strategy types (migrated to pkg/types/)
 ```
 
 

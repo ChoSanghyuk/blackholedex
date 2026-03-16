@@ -72,7 +72,7 @@ func main() {
 	strategyConf := conf.ToStrategyConfig()
 	reportChan := make(chan string)
 	go func() {
-		err := blackhole.RunStrategy1(
+		err := blackhole.RunAutoPositionStrategy(
 			context.Background(),
 			reportChan,
 			strategyConf,
