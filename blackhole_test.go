@@ -278,10 +278,10 @@ func TestBlackhole(t *testing.T) {
 	// })
 
 	t.Run("Mint", func(t *testing.T) {
-
-		maxWAVAX := big.NewInt(188845000000000000) // 188845000000000000
-		maxUSDC := big.NewInt(1878702)
-		rangeWidth := 10
+		b.poolType = types.CL1
+		maxWAVAX := big.NewInt(410565038267351832) //0.390070889896271532
+		maxUSDC := big.NewInt(160879)
+		rangeWidth := 200
 		slippagePct := 5
 
 		rtn, err := b.Mint(maxWAVAX, maxUSDC, rangeWidth, slippagePct)

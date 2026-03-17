@@ -76,6 +76,48 @@ func (b *Blackhole) Mint(
 	log.Printf("Capital Utilization: WAVAX %d%%, USDC %d%%",
 		utilization0.Int64(), utilization1.Int64())
 
+	// T032: For CL1 pools, automatically adjust range if utilization is low
+	// This helps minimize wasted tokens by extending the range asymmetrically
+	if b.poolType == types.CL1 && (utilization0.Cmp(big.NewInt(90)) < 0 || utilization1.Cmp(big.NewInt(90)) < 0) {
+		originalTickLower := tickLower
+		originalTickUpper := tickUpper
+
+		log.Printf("🔄 CL1 Pool: Low capital utilization detected (WAVAX: %d%%, USDC: %d%%). Attempting to optimize range...",
+			utilization0.Int64(), utilization1.Int64())
+
+		optTickLower, optTickUpper, optAmount0, optAmount1, optErr := util.CalculateOptimalRangeWidthForCL1(
+			state.Tick,
+			rangeWidth,
+			tickSpacing,
+			state.SqrtPrice,
+			maxWAVAX,
+			maxUSDC,
+			90, // 90% utilization threshold
+			20, // Try up to 20 iterations
+		)
+
+		if optErr == nil {
+			// Use optimized tick bounds
+			tickLower = optTickLower
+			tickUpper = optTickUpper
+			amount0Desired = optAmount0
+			amount1Desired = optAmount1
+
+			// Recalculate utilization
+			utilization0 = new(big.Int).Mul(amount0Desired, big.NewInt(100))
+			utilization0.Div(utilization0, maxWAVAX)
+			utilization1 = new(big.Int).Mul(amount1Desired, big.NewInt(100))
+			utilization1.Div(utilization1, maxUSDC)
+
+			log.Printf("✅ Optimized tick range: TickLower: %d → %d, TickUpper: %d → %d",
+				originalTickLower, tickLower, originalTickUpper, tickUpper)
+			log.Printf("✅ Improved Capital Utilization: WAVAX %d%%, USDC %d%%",
+				utilization0.Int64(), utilization1.Int64())
+		} else {
+			log.Printf("⚠️  Failed to optimize range: %v", optErr)
+		}
+	}
+
 	// T032: Warn if >10% of either token will be unused (capital efficiency warning)
 	wastedWAVAX := new(big.Int).Sub(maxWAVAX, amount0Desired)
 	wastedUSDC := new(big.Int).Sub(maxUSDC, amount1Desired)
