@@ -1,4 +1,4 @@
-module blackholego
+module github.com/ChoSanghyuk/blackholedex
 
 go 1.24.9
 

@@ -1,13 +1,14 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/types"
-	"blackholego/pkg/util"
 	"context"
 	"fmt"
 	"log"
 	"math/big"
 	"time"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
+	"github.com/ChoSanghyuk/blackholedex/pkg/util"
 )
 
 // RecordCurrentAssetSnapshot records a snapshot of the current asset state

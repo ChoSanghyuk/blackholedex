@@ -1,11 +1,12 @@
 package configs
 
 import (
-	blackholedex "blackholego"
-	"blackholego/pkg/types"
 	"fmt"
 	"os"
 	"time"
+
+	blackholedex "github.com/ChoSanghyuk/blackholedex"
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 
 	"gopkg.in/yaml.v3"
 )

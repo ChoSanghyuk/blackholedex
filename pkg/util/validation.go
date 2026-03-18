@@ -1,10 +1,11 @@
 package util
 
 import (
-	"blackholego/pkg/types"
 	"fmt"
 	"math"
 	"math/big"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 )
 
 // Validation and helper functions for liquidity staking operations

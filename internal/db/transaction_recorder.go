@@ -1,10 +1,11 @@
 package db
 
 import (
-	"blackholego/pkg/types"
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

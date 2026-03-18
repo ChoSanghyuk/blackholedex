@@ -1,10 +1,10 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/types"
 	"crypto/ecdsa"
 	"math/big"
 
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )

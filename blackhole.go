@@ -1,14 +1,15 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/contractclient"
-	"blackholego/pkg/types"
-	"blackholego/pkg/util"
 	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/contractclient"
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
+	"github.com/ChoSanghyuk/blackholedex/pkg/util"
 
 	"log"
 

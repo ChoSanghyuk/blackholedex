@@ -1,13 +1,14 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/types"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
 	"time"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
 )

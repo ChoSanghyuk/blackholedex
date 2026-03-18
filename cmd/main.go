@@ -1,15 +1,16 @@
 package main
 
 import (
-	blackholedex "blackholego"
-	"blackholego/configs"
-	"blackholego/internal/db"
-	"blackholego/pkg/txlistener"
-	"blackholego/pkg/util"
 	"context"
 	"fmt"
 	"os"
 	"time"
+
+	blackholedex "github.com/ChoSanghyuk/blackholedex"
+	"github.com/ChoSanghyuk/blackholedex/configs"
+	"github.com/ChoSanghyuk/blackholedex/internal/db"
+	"github.com/ChoSanghyuk/blackholedex/pkg/txlistener"
+	"github.com/ChoSanghyuk/blackholedex/pkg/util"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 )

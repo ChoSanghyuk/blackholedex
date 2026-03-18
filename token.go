@@ -1,10 +1,11 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/types"
 	"errors"
 	"fmt"
 	"math/big"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
 )

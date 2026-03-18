@@ -1,10 +1,11 @@
 package db
 
 import (
-	"blackholego/pkg/types"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"gorm.io/driver/mysql"

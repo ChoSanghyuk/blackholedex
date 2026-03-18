@@ -1,11 +1,12 @@
 package blackholedex
 
 import (
-	"blackholego/pkg/contractclient"
-	"blackholego/pkg/txlistener"
-	"blackholego/pkg/types"
-	"blackholego/pkg/util"
 	"crypto/ecdsa"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/contractclient"
+	"github.com/ChoSanghyuk/blackholedex/pkg/txlistener"
+	"github.com/ChoSanghyuk/blackholedex/pkg/types"
+	"github.com/ChoSanghyuk/blackholedex/pkg/util"
 
 	"math/big"
 	"os"

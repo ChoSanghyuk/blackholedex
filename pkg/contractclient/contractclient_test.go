@@ -1,13 +1,14 @@
 package contractclient
 
 import (
-	"blackholego/pkg/util"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ChoSanghyuk/blackholedex/pkg/util"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
