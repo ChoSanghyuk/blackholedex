@@ -44,7 +44,7 @@ func (p PoolType) PoolNonce() *big.Int {
 func (p PoolType) TickSpacing() int {
 	switch p {
 	case CL1:
-		return 1 // memo. CL1에 대해선 200만큼 조정해서 진입. 조정 없을 시, 바로 아웃오브레인지 되는 경우가 많음
+		return 200 // memo. CL1에 대해선 200만큼 조정해서 진입. 조정 없을 시, 바로 아웃오브레인지 되는 경우가 많음
 	case CL200:
 		return 200
 	default:

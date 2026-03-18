@@ -8,18 +8,18 @@ import (
 // TestCalculateOptimalRangeWidthForCL1 tests the optimal range width calculation
 func TestCalculateOptimalRangeWidthForCL1(t *testing.T) {
 	// Test case: CL1 pool with imbalanced liquidity
-	currentTick := int32(-249587)
+	currentTick := int32(-253050)
 	baseRangeWidth := 10 // Starting with 10 ticks
-	tickSpacing := 1
+	tickSpacing := 200
 
 	// Simulate prices
 	sqrtPrice := TickToSqrtPriceX96(int(currentTick))
 
 	// Test amounts (1 WAVAX = 18 decimals, 40 USDC = 6 decimals)
 	maxWAVAX := new(big.Int)
-	maxWAVAX.SetString("1000000000000000000", 10) // 1 WAVAX
+	maxWAVAX.SetString("69232198285737839799", 10) // 1 WAVAX
 	maxUSDC := new(big.Int)
-	maxUSDC.SetString("4000000", 10) // 40 USDC
+	maxUSDC.SetString("933808849", 10) // 40 USDC
 
 	utilizationThreshold := int64(90)
 	maxIterations := 10
